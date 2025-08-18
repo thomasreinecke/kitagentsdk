@@ -1,0 +1,45 @@
+# src/kitagentsdk/templates/main.py.template
+from kitagentsdk import BaseAgent, run_agent
+import time
+
+class {{AGENT_NAME}}(BaseAgent):
+    def train(self):
+        """
+        Main training logic for the {{AGENT_NAME}}.
+        """
+        self.log(f"--- {{AGENT_NAME}} Training Run Initializing ---")
+        
+        sleep_duration = self.config.get("sleep_duration", 10)
+        self.log(f"Configuration loaded. Simulating work for {sleep_duration} seconds.")
+
+        # Simulate training loop
+        for i in range(sleep_duration):
+            self.log(f"Step {i+1}/{sleep_duration}: Processing data...")
+            pnl = (i + 1 - (sleep_duration / 2)) * 0.1 # Example metric
+            self.record_metric("pnl", pnl)
+            time.sleep(1)
+
+        # Simulate creating an artifact
+        artifact_file_path = self.output_path / "model.txt"
+        with open(artifact_file_path, "w") as f:
+            f.write("This is a dummy model artifact.")
+        self.log(f"Dummy artifact created at: {artifact_file_path}")
+
+        self.log("--- {{AGENT_NAME}} Training Run Finished ---")
+
+if __name__ == "__main__":
+    run_agent({{AGENT_NAME}})```
+
+```json
+# kitagentsdk/src/kitagentsdk/templates/manifest.json.template
+{
+  "name": "{{AGENT_NAME}}",
+  "description": "A brief description of what this agent does.",
+  "parameters": {
+    "sleep_duration": {
+      "type": "integer",
+      "description": "How long the agent should 'work' in seconds.",
+      "default": 10
+    }
+  }
+}
