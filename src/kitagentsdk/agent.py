@@ -1,7 +1,9 @@
 # src/kitagentsdk/agent.py
 import json
+import os
 from pathlib import Path
 from abc import ABC, abstractmethod
+from .kit import KitClient
 
 class BaseAgent(ABC):
     """Abstract base class for all Kit agents."""
@@ -15,6 +17,9 @@ class BaseAgent(ABC):
                 self.config = json.load(f)
         except (FileNotFoundError, json.JSONDecodeError):
             self.config = {}
+
+        # Initialize the API client
+        self.kit = KitClient()
 
     def log(self, message: str):
         """Logs a message to the standard output, ensuring it's captured by kitexec."""
