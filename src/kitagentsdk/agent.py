@@ -18,18 +18,17 @@ class BaseAgent(ABC):
         except (FileNotFoundError, json.JSONDecodeError):
             self.config = {}
 
-        # Initialize the API client
         self.kit = KitClient()
 
     def log(self, message: str):
         """Logs a message to the standard output, ensuring it's captured by kitexec."""
         print(message, flush=True)
 
-    def record_metric(self, name: str, value: float):
-        """Records a key-value metric to the standard metrics log file."""
+    def record_metric(self, name: str, step: int, value: float):
+        """Records a key-step-value metric to the standard metrics log file."""
         metrics_file = self.output_path / "metrics.log"
         with open(metrics_file, "a") as f:
-            f.write(f"{name},{value}\n")
+            f.write(f"{step},{name},{value}\n")
 
     @abstractmethod
     def train(self):
