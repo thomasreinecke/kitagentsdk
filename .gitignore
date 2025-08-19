@@ -1,0 +1,25 @@
+# kitagentsdk/.gitignore
+# Python build artifacts
+build/
+dist/
+*.egg-info/
+*.so
+*.pyd
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# IDE and editor directories
+.vscode/
+.idea/
+
+# OS-specific files
+.DS_Store
