@@ -40,13 +40,13 @@ class KitClient:
         endpoint = f"{self.api_endpoint}/api/artifacts/{artifact_id}/download"
         
         try:
-            logger.info(f"Downloading artifact {artifact_id} from {endpoint}...")
+            print(f"Downloading artifact {artifact_id} from {endpoint}...")
             with requests.get(endpoint, headers={"X-API-KEY": self.api_key}, stream=True) as r:
                 r.raise_for_status()
                 with open(destination_path, 'wb') as f:
                     for chunk in r.iter_content(chunk_size=8192): 
                         f.write(chunk)
-            logger.info(f"Successfully downloaded artifact to '{destination_path}'")
+            print(f"✅ Successfully downloaded artifact to '{destination_path}'")
             return True
         except requests.RequestException as e:
             logger.error(f"Failed to download artifact: {e}")
@@ -73,10 +73,10 @@ class KitClient:
         endpoint = f"{self.api_endpoint}/api/data/training_set"
         
         try:
-            logger.info(f"Requesting training data with params: {params}")
+            print(f"Requesting training data with params: {params}")
             response = requests.post(endpoint, json=params, headers=self.headers, timeout=300) # 5 min timeout for large data
             response.raise_for_status()
-            logger.info("Successfully received training data.")
+            print("✅ Successfully received training data.")
             return response.json()
         except requests.RequestException as e:
             logger.error(f"Failed to get training data: {e}")
