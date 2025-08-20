@@ -1,0 +1,35 @@
+{
+  "name": "{{AGENT_NAME}}",
+  "version": "1.0",
+  "description": "A brief description of what this agent does.",
+  "parameters": {
+    "hyperparameters": {
+      "label": "Hyperparameters",
+      "items": {
+        "total_steps": {
+          "label": "Total Steps",
+          "type": "integer",
+          "default": 100,
+          "description": "The total number of steps to simulate training for."
+        },
+        "learning_rate": {
+          "label": "Learning Rate",
+          "type": "float",
+          "default": 0.01,
+          "description": "The learning rate for the optimizer."
+        }
+      }
+    }
+  },
+  "default_features": [],
+  "default_training": [
+    {
+      "stage": 1,
+      "name": "Primary Training",
+      "description": "A single-stage training plan for this agent.",
+      "config": {
+        "timesteps": 1000
+      }
+    }
+  ]
+}

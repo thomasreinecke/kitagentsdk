@@ -1,45 +1,57 @@
 # src/kitagentsdk/templates/main.py.template
 from kitagentsdk import BaseAgent, run_agent
 import time
+import sys
 
 class {{AGENT_NAME}}(BaseAgent):
+    """
+    Main training logic for the {{AGENT_NAME}}.
+    """
     def train(self):
         """
-        Main training logic for the {{AGENT_NAME}}.
+        This method is called by the kitexec executor.
         """
         self.log(f"--- {{AGENT_NAME}} Training Run Initializing ---")
-        
-        sleep_duration = self.config.get("sleep_duration", 10)
-        self.log(f"Configuration loaded. Simulating work for {sleep_duration} seconds.")
 
-        # Simulate training loop
-        for i in range(sleep_duration):
-            self.log(f"Step {i+1}/{sleep_duration}: Processing data...")
-            pnl = (i + 1 - (sleep_duration / 2)) * 0.1 # Example metric
-            self.record_metric("pnl", pnl)
-            time.sleep(1)
+        # --- 1. Load Configuration ---
+        # Access parameters from manifest.json via self.config
+        try:
+            total_steps = int(self.config.get("total_steps", 100))
+            learning_rate = float(self.config.get("learning_rate", 0.01))
+            self.log(f"Configuration loaded: total_steps={total_steps}, learning_rate={learning_rate}")
+        except (ValueError, TypeError) as e:
+            self.log(f"❌ Error: Invalid configuration parameters provided. {e}")
+            sys.exit(1)
 
-        # Simulate creating an artifact
-        artifact_file_path = self.output_path / "model.txt"
-        with open(artifact_file_path, "w") as f:
-            f.write("This is a dummy model artifact.")
-        self.log(f"Dummy artifact created at: {artifact_file_path}")
+        # --- 2. Simulate Training Loop ---
+        # In a real agent, this would be your model.learn() call.
+        self.log("Starting simulated training loop...")
+        for i in range(total_steps):
+            # Report progress frequently for a responsive UI
+            self.report_progress(i + 1)
+            
+            self.log(f"Step {i+1}/{total_steps}: Processing data...")
+            
+            # Record metrics periodically for visualization
+            if (i + 1) % 10 == 0:
+                pnl = (i + 1 - (total_steps / 2)) * 0.1 # Example metric
+                self.record_metric("performance/pnl", i + 1, pnl)
+            
+            time.sleep(0.1)
 
-        self.log("--- {{AGENT_NAME}} Training Run Finished ---")
+        # --- 3. Save Artifacts ---
+        # The platform expects a standardized 'model.zip' for stage transitions.
+        try:
+            model_artifact_path = self.output_path / "model.zip"
+            with open(model_artifact_path, "w") as f:
+                f.write(f"This is a dummy model trained for {total_steps} steps.")
+            self.log(f"✅ Model artifact saved to: {model_artifact_path}")
+        except IOError as e:
+            self.log(f"❌ Error: Could not save artifact. {e}")
+            sys.exit(1)
+
+        self.log("--- ✅ {{AGENT_NAME}} Training Run Finished ---")
 
 if __name__ == "__main__":
-    run_agent({{AGENT_NAME}})```
-
-```json
-# kitagentsdk/src/kitagentsdk/templates/manifest.json.template
-{
-  "name": "{{AGENT_NAME}}",
-  "description": "A brief description of what this agent does.",
-  "parameters": {
-    "sleep_duration": {
-      "type": "integer",
-      "description": "How long the agent should 'work' in seconds.",
-      "default": 10
-    }
-  }
-}
+    # This allows the script to be run directly by the kitexec executor
+    run_agent({{AGENT_NAME}})
