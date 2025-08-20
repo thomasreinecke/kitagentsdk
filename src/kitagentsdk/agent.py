@@ -24,6 +24,12 @@ class BaseAgent(ABC):
         """Logs a message to the standard output, ensuring it's captured by kitexec."""
         print(message, flush=True)
 
+    def report_progress(self, step: int):
+        """Reports the current training step to a dedicated progress file."""
+        progress_file = self.output_path / "progress.log"
+        with open(progress_file, "w") as f:
+            f.write(str(step))
+
     def record_metric(self, name: str, step: int, value: float):
         """Records a key-step-value metric to the standard metrics log file."""
         metrics_file = self.output_path / "metrics.log"
