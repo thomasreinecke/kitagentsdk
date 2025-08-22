@@ -37,7 +37,7 @@ class ContextClient:
             self._connect()
 
     def log(self, message: str):
-        self._send_message({"type": "log", "payload": message})
+        self.send_message({"type": "log", "payload": message})
 
     def emit_event(self, event_name: str, status: str = "info"):
         self.send_message({"type": "event", "event": event_name, "status": status})
