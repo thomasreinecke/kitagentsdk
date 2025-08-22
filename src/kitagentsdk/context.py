@@ -23,7 +23,7 @@ class ContextClient:
             logger.error(f"Could not connect to kitexec context socket at {self.socket_path}: {e}")
             self.socket = None
 
-    def _send_message(self, payload: dict):
+    def send_message(self, payload: dict):
         if not self.socket:
             return
         try:
@@ -40,7 +40,7 @@ class ContextClient:
         self._send_message({"type": "log", "payload": message})
 
     def emit_event(self, event_name: str, status: str = "info"):
-        self._send_message({"type": "event", "event": event_name, "status": status})
+        self.send_message({"type": "event", "event": event_name, "status": status})
 
     def close(self):
         if self.socket:
