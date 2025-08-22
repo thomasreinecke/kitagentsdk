@@ -54,10 +54,20 @@ class BaseAgent(ABC):
             f.write(str(step))
 
     def record_metric(self, name: str, step: int, value: float):
-        """Records a key-step-value metric to the standard metrics log file."""
-        metrics_file = self.output_path / "metrics.log"
-        with open(metrics_file, "a") as f:
-            f.write(f"{step},{name},{value}\n")
+        """Records a key-step-value metric, sending it to the context server."""
+        if self.context_client:
+            payload = {
+                "type": "metric",
+                "name": name,
+                "step": step,
+                "value": value
+            }
+            self.context_client.send_message(payload)
+        else:
+            # Fallback for local testing without an executor
+            metrics_file = self.output_path / "metrics.log"
+            with open(metrics_file, "a") as f:
+                f.write(f"{step},{name},{value}\n")
 
     def orchestrate_sb3_training(
         self,
@@ -75,13 +85,14 @@ class BaseAgent(ABC):
         norm_stats_path = self.output_path / "norm_stats.json"
 
         from stable_baselines3.common.callbacks import CallbackList
-        from .callbacks import InterimSaveCallback, KitLogCallback
+        from .callbacks import InterimSaveCallback, KitLogCallback, SB3MetricsCallback
 
         checkpoint_freq = self.config.get("checkpoint_freq", 10000)
         
         callbacks = [
             InterimSaveCallback(save_path=str(temp_model_path), save_freq=checkpoint_freq),
             KitLogCallback(),
+            SB3MetricsCallback(),
         ]
         if custom_callbacks:
             callbacks.extend(custom_callbacks)
