@@ -28,6 +28,10 @@ class KitLogCallback(BaseCallback):
         if not self.agent:
             env = self.training_env.envs[0].unwrapped
             self.agent = env.kit_client.agent
+
+        # Always update the environment with the current training progress from SB3.
+        env = self.training_env.envs[0].unwrapped
+        env.set_training_progress(self.num_timesteps, self.locals['total_timesteps'])
         
         # Report progress back to the kit platform
         self.agent.report_progress(self.num_timesteps)
