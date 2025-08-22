@@ -36,8 +36,11 @@ class BaseAgent(ABC):
     def log(self, message: str):
         """Logs a message, sending it to the context server if available, otherwise printing."""
         if self.context_client:
-            self.context_client.log(message)
+            # Ensure the message has a newline for proper concatenation in the DB.
+            log_message = message if message.endswith('\n') else message + '\n'
+            self.context_client.log(log_message)
         else:
+            # print() adds its own newline, so we send the original message.
             print(message, flush=True)
 
     def emit_event(self, event_name: str, status: str = "info"):
