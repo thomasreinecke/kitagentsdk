@@ -54,11 +54,11 @@ class SB3MetricsCallback(BaseCallback):
         if len(self.model.ep_info_buffer) > 0 and len(self.model.ep_info_buffer[0]) > 0:
             ep_rew_mean = np.mean([ep_info["r"] for ep_info in self.model.ep_info_buffer])
             ep_len_mean = np.mean([ep_info["l"] for ep_info in self.model.ep_info_buffer])
-            self.agent.record_metric("rollout/ep_rew_mean", self.num_timesteps, ep_rew_mean)
-            self.agent.record_metric("rollout/ep_len_mean", self.num_timesteps, ep_len_mean)
+            self.agent.record_metric("rollout/ep_rew_mean", self.num_timesteps, float(ep_rew_mean))
+            self.agent.record_metric("rollout/ep_len_mean", self.num_timesteps, float(ep_len_mean))
 
         # Standard training metrics from the last logger update
         if self.model.logger.name_to_value:
             for key, value in self.model.logger.name_to_value.items():
                 if key.startswith("train/") or key.startswith("time/"):
-                    self.agent.record_metric(key, self.num_timesteps, value)
+                    self.agent.record_metric(key, self.num_timesteps, float(value))
