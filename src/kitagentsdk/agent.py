@@ -135,6 +135,7 @@ class BaseAgent(ABC):
         """The main training logic for the agent."""
         pass
 
+    @abstractmethod
     def test(self):
         """The main testing/backtesting logic for the agent."""
-        self.log("Test command not implemented for this agent.")
+        pass

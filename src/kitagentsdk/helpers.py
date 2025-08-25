@@ -17,7 +17,7 @@ def run_agent(agent_class: type[BaseAgent]):
     train_parser.add_argument("--output-path", required=True, help="Directory for artifacts and logs.")
     
     # Test command
-    test_parser = subparsers.add_parser("test", help="Run a testing job.")
+    test_parser = subparsers.add_parser("test", help="Run a backtesting/simulation job.")
     test_parser.add_argument("--config", required=True, help="Path to configuration JSON file.")
     test_parser.add_argument("--output-path", required=True, help="Directory for artifacts and logs.")
 
