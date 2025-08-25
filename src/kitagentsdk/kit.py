@@ -59,6 +59,29 @@ class KitClient:
             else: print(msg)
             if self.agent: self.agent.emit_event("ARTIFACT_DOWNLOAD_FAILED", "failure")
             return False
+            
+    def download_artifacts_for_run(self, source_run_id: UUID, destination_folder: Path) -> bool:
+        """Finds and downloads all artifacts for a given run ID."""
+        list_endpoint = f"{self.api_endpoint}/api/runs/{source_run_id}/artifacts/list"
+        try:
+            list_response = requests.post(list_endpoint, headers=self.headers, timeout=10)
+            list_response.raise_for_status()
+            artifacts = list_response.json()
+        except requests.RequestException as e:
+            msg = f"Failed to list artifacts for run {source_run_id}: {e}"
+            if self.agent: self.agent.log(msg)
+            else: print(msg)
+            return False
+
+        if not artifacts:
+            msg = f"No artifacts found for run {source_run_id}."
+            if self.agent: self.agent.log(msg)
+            else: print(msg)
+            return False
+
+        for artifact in artifacts:
+            self.download_artifact(artifact['id'], destination_folder / artifact['filename'])
+        return True
 
     def get_training_data(self, params: dict) -> dict | None:
         """
