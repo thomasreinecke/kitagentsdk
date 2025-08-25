@@ -23,6 +23,7 @@ class BaseAgent(ABC):
             self.config = {}
 
         self.context_client = None
+        self.is_test_run = False # Flag to indicate if running in test/simulation mode
         context_path = os.getenv("KIT_CONTEXT_PATH")
         if context_path:
             self.context_client = ContextClient(context_path)
@@ -47,7 +48,8 @@ class BaseAgent(ABC):
         """Emits a lifecycle event to the context server if available."""
         if self.context_client:
             self.context_client.emit_event(event_name, status)
-        else:
+        elif not self.is_test_run:
+            # Fallback for local debugging, but suppress during test runs
             print(f"[EVENT] {event_name} ({status})", flush=True)
 
     def report_progress(self, step: int):

@@ -28,4 +28,5 @@ def run_agent(agent_class: type[BaseAgent]):
     if args.command == "train":
         agent_instance.train()
     elif args.command == "test":
+        agent_instance.is_test_run = True
         agent_instance.test()
