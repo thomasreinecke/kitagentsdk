@@ -106,8 +106,17 @@ class KitClient:
             if self.agent: self.agent.log(msg)
             else: print(msg)
             if self.agent: self.agent.emit_event("TRAINING_DATA_FAILED", "failure")
+            
+            # --- THIS IS THE FIX (Part 3) ---
+            # Try to parse the JSON error response from the backend for a clearer message.
             if hasattr(e, 'response') and e.response is not None:
-                err_body = f"Response body: {e.response.text}"
-                if self.agent: self.agent.log(err_body)
-                else: print(err_body)
+                try:
+                    error_detail = e.response.json().get("detail", e.response.text)
+                    err_body = f"Response body: {error_detail}"
+                    if self.agent: self.agent.log(err_body)
+                    else: print(err_body)
+                except Exception:
+                    err_body = f"Response body: {e.response.text}"
+                    if self.agent: self.agent.log(err_body)
+                    else: print(err_body)
             return None
