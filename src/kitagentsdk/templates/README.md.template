@@ -14,6 +14,14 @@ A new agent for the Kit platform.
     pip install -r requirements.txt
     ```
 
+    or
+
+    ```
+    make install
+    make config-train
+    make train
+    ```
+
 2.  **Run Locally:**
     Create a `config.json` file with your desired parameters, then run the training script.
 

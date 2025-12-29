@@ -1,0 +1,131 @@
+# src/kitagentsdk/templates/Makefile.template
+export PYTHONDONTWRITEBYTECODE=1
+export PIP_DISABLE_PIP_VERSION_CHECK=1
+
+VENV             ?= .venv
+PYTHON_SYSTEM    ?= python3
+MAIN_SCRIPT      ?= main.py
+
+OUTPUT_DIR       ?= _output
+CONFIG_TRAIN     ?= config-train.json
+CONFIG_TEST      ?= config-test.json
+REQUIREMENTS     ?= requirements.txt
+
+# SDK install mode:
+#   - pypi:     install kitagentsdk from requirements.txt (recommended for users)
+#   - editable: pip install -e ../kitagentsdk (recommended for SDK development)
+SDK_MODE         ?= pypi
+SDK_PATH         ?= ../kitagentsdk
+
+# Default to trusted-host (matches your proven working setup). Disable via:
+#   make install PIP_EXTRA_ARGS=""
+PIP_TRUSTED_HOST_ARGS ?= --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org
+PIP_EXTRA_ARGS        ?= $(PIP_TRUSTED_HOST_ARGS)
+
+ifeq ($(OS),Windows_NT)
+	VENV_BIN = Scripts
+else
+	VENV_BIN = bin
+endif
+
+VENV_PYTHON  = $(VENV)/$(VENV_BIN)/python
+PIP         = $(VENV_PYTHON) -m pip
+DEPS_STAMP  = $(VENV)/.deps_installed
+
+.PHONY: help all install clean train test config-train config-test
+
+help:
+	@echo ""
+	@echo "Kit Agent: {{AGENT_NAME}}"
+	@echo ""
+	@echo "Targets:"
+	@echo "  make install            Create venv + install deps (only if needed)"
+	@echo "  make train              Run training (uses $(CONFIG_TRAIN))"
+	@echo "  make test               Run test/backtest (uses $(CONFIG_TEST))"
+	@echo "  make config-train       Create a minimal train config JSON"
+	@echo "  make config-test        Create a minimal test config JSON"
+	@echo "  make clean              Remove venv + artifacts"
+	@echo ""
+	@echo "Options:"
+	@echo "  SDK_MODE=pypi|editable  (default: $(SDK_MODE))"
+	@echo "  SDK_PATH=../kitagentsdk (default: $(SDK_PATH))"
+	@echo "  PYTHON_SYSTEM=python3   (default: $(PYTHON_SYSTEM))"
+	@echo "  PIP_EXTRA_ARGS='...'    (default: trusted-host enabled; set empty to disable)"
+
+all: install
+
+install: $(DEPS_STAMP)
+	@echo "✅ Dependencies already installed (or just installed now)."
+
+$(VENV)/.created:
+	@if [ ! -d "$(VENV)" ]; then \
+		echo "🐍 Creating Python virtual environment..."; \
+		$(PYTHON_SYSTEM) -m venv $(VENV); \
+	fi
+	@echo "🐍 Installing/upgrading pip & certifi..."
+	@$(PIP) install --upgrade pip certifi $(PIP_EXTRA_ARGS)
+	@touch $(VENV)/.created
+
+# This runs ONLY when requirements.txt changed or venv was recreated
+$(DEPS_STAMP): $(REQUIREMENTS) $(VENV)/.created
+	@echo "🐍 Installing dependencies from $(REQUIREMENTS)..."
+	@CERT="$$( $(VENV_PYTHON) -m certifi 2>/dev/null || true )"; \
+	if [ "$(SDK_MODE)" = "editable" ]; then \
+		echo "🐍 Installing kitagentsdk in editable mode from $(SDK_PATH)..."; \
+		if [ -n "$$CERT" ]; then \
+			$(PIP) install -e $(SDK_PATH) --cert="$$CERT" $(PIP_EXTRA_ARGS); \
+		else \
+			$(PIP) install -e $(SDK_PATH) $(PIP_EXTRA_ARGS); \
+		fi; \
+	else \
+		echo "🐍 Using kitagentsdk from PyPI (via requirements.txt)..."; \
+	fi; \
+	if [ -n "$$CERT" ]; then \
+		$(PIP) install -r $(REQUIREMENTS) --cert="$$CERT" $(PIP_EXTRA_ARGS); \
+	else \
+		$(PIP) install -r $(REQUIREMENTS) $(PIP_EXTRA_ARGS); \
+	fi
+	@echo "SDK_MODE=$(SDK_MODE)" > $(DEPS_STAMP)
+	@echo "✅ Installation complete."
+
+config-train:
+	@if [ -f "$(CONFIG_TRAIN)" ]; then \
+		echo "ℹ️  $(CONFIG_TRAIN) already exists."; \
+	else \
+		echo '{ "total_steps": 1000, "learning_rate": 0.0001 }' > $(CONFIG_TRAIN); \
+		echo "✅ Wrote $(CONFIG_TRAIN) (edit values as needed)."; \
+	fi
+
+config-test:
+	@if [ -f "$(CONFIG_TEST)" ]; then \
+		echo "ℹ️  $(CONFIG_TEST) already exists."; \
+	else \
+		echo '{ "total_steps": 0 }' > $(CONFIG_TEST); \
+		echo "✅ Wrote $(CONFIG_TEST) (edit values as needed)."; \
+	fi
+
+clean:
+	@echo "🧹 Cleaning up project..."
+	@find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+	@rm -rf $(VENV) $(OUTPUT_DIR) *.egg-info dist build
+	@echo "✅ Cleanup complete."
+
+train: $(DEPS_STAMP)
+	@if [ ! -f "$(CONFIG_TRAIN)" ]; then \
+		echo "❌ Missing $(CONFIG_TRAIN). Run: make config-train (then edit it)"; \
+		exit 1; \
+	fi
+	@echo "🚀 Training..."
+	@rm -rf $(OUTPUT_DIR) && mkdir -p $(OUTPUT_DIR)
+	@$(VENV_PYTHON) $(MAIN_SCRIPT) train --config $(CONFIG_TRAIN) --output-path ./$(OUTPUT_DIR)
+	@echo "✅ Training done. See $(OUTPUT_DIR)/"
+
+test: $(DEPS_STAMP)
+	@if [ ! -f "$(CONFIG_TEST)" ]; then \
+		echo "❌ Missing $(CONFIG_TEST). Run: make config-test (then edit it)"; \
+		exit 1; \
+	fi
+	@echo "🚀 Testing / backtest..."
+	@mkdir -p $(OUTPUT_DIR)
+	@$(VENV_PYTHON) $(MAIN_SCRIPT) test --config $(CONFIG_TEST) --output-path ./$(OUTPUT_DIR)
+	@echo "✅ Test done."

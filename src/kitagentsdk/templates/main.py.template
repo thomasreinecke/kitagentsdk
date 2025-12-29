@@ -3,10 +3,12 @@ from kitagentsdk import BaseAgent, run_agent
 import time
 import sys
 
-class {{AGENT_NAME}}(BaseAgent):
+
+class {{AGENT_CLASS_NAME}}(BaseAgent):
     """
     Main training logic for the {{AGENT_NAME}}.
     """
+
     def train(self):
         """
         This method is called by the kitexec executor.
@@ -29,14 +31,14 @@ class {{AGENT_NAME}}(BaseAgent):
         for i in range(total_steps):
             # Report progress frequently for a responsive UI
             self.report_progress(i + 1)
-            
+
             self.log(f"Step {i+1}/{total_steps}: Processing data...")
-            
+
             # Record metrics periodically for visualization
             if (i + 1) % 10 == 0:
-                pnl = (i + 1 - (total_steps / 2)) * 0.1 # Example metric
+                pnl = (i + 1 - (total_steps / 2)) * 0.1  # Example metric
                 self.record_metric("performance/pnl", i + 1, pnl)
-            
+
             time.sleep(0.1)
 
         # --- 3. Save Artifacts ---
@@ -52,6 +54,15 @@ class {{AGENT_NAME}}(BaseAgent):
 
         self.log("--- ✅ {{AGENT_NAME}} Training Run Finished ---")
 
+    def test(self):
+        """
+        This method is called by the kitexec executor in simulation/backtest mode.
+        """
+        self.log(f"--- {{AGENT_NAME}} Test Run Initializing ---")
+        self.log("No test logic implemented yet.")
+        self.log("--- ✅ Test Run Finished ---")
+
+
 if __name__ == "__main__":
     # This allows the script to be run directly by the kitexec executor
-    run_agent({{AGENT_NAME}})
+    run_agent({{AGENT_CLASS_NAME}})
