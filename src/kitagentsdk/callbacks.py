@@ -20,27 +20,30 @@ class KitLogCallback(BaseCallback):
     """
     Handles basic progress reporting via the KitAgentSDK.
     """
-    def __init__(self, verbose: int = 0):
+    def __init__(self, offset: int = 0, verbose: int = 0):
         super().__init__(verbose)
         self.agent = None
+        self.offset = offset
 
     def _on_step(self) -> bool:
         if not self.agent:
             env = self.training_env.envs[0].unwrapped
             self.agent = env.kit_client.agent
 
-        # Always update the environment with the current training progress from SB3.
+        # Update the environment with the current training progress (Global view)
         env = self.training_env.envs[0].unwrapped
         env.set_training_progress(self.num_timesteps, self.locals['total_timesteps'])
         
-        # Report progress back to the kit platform
-        self.agent.report_progress(self.num_timesteps)
+        # Report progress back to the kit platform (Relative view)
+        # We subtract the offset so the backend sees steps 0..N for this specific stage.
+        relative_step = max(0, self.num_timesteps - self.offset)
+        self.agent.report_progress(relative_step)
         return True
 
 class SB3MetricsCallback(BaseCallback):
     """
-    Streams standard Stable Baselines 3 metrics directly to the backend,
-    bypassing the need for TensorBoard log file parsing.
+    Streams standard Stable Baselines 3 metrics directly to the backend.
+    Uses cumulative (global) steps to ensure charts are continuous across stages.
     """
     def __init__(self, verbose: int = 0):
         super().__init__(verbose)

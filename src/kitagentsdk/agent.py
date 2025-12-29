@@ -98,9 +98,17 @@ class BaseAgent(ABC):
 
         checkpoint_freq = self.config.get("checkpoint_freq", 10000)
         
+        # --- FIX: Calculate offset for progress reporting ---
+        # If we are resuming (is_new_model=False), model.num_timesteps contains the 
+        # cumulative steps from previous runs. We need to subtract this from the 
+        # current num_timesteps in the callback to report only the steps done in THIS stage.
+        progress_offset = 0
+        if not is_new_model:
+            progress_offset = model.num_timesteps
+
         callbacks = [
             InterimSaveCallback(save_path=str(temp_model_path), save_freq=checkpoint_freq),
-            KitLogCallback(),
+            KitLogCallback(offset=progress_offset),
             SB3MetricsCallback(),
         ]
         if custom_callbacks:
