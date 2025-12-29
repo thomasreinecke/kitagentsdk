@@ -5,6 +5,7 @@ dist/
 *.egg-info/
 *.so
 *.pyd
+_kitagentsdk-composition.txt
 
 # Python bytecode
 __pycache__/

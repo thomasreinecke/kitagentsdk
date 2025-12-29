@@ -107,7 +107,6 @@ class KitClient:
             else: print(msg)
             if self.agent: self.agent.emit_event("TRAINING_DATA_FAILED", "failure")
             
-            # --- THIS IS THE FIX (Part 3) ---
             # Try to parse the JSON error response from the backend for a clearer message.
             if hasattr(e, 'response') and e.response is not None:
                 try:

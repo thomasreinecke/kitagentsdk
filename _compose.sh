@@ -20,7 +20,8 @@ EXTENSIONS=(
   py js ts mjs cjs jsx tsx
   json txt md
   html htm css scss less
-  svelte mk sh
+  svelte mk sh 
+  toml template in
 )
 
 # Specific basenames to include (files without/with special names)

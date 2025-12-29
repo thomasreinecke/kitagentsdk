@@ -1,5 +1,7 @@
 # Kit Agent SDK
 
+https://pypi.org/project/kitagentsdk/
+
 The `kitagentsdk` is a Python library that provides a standardized, high-level framework for developing agents for the Kit platform. It is designed to abstract away the boilerplate of platform integration, allowing developers to focus entirely on their agent's core logic.
 
 This package includes both the SDK (the `kitagentsdk` library) and a command-line interface (`kitagentcli`) to accelerate development.

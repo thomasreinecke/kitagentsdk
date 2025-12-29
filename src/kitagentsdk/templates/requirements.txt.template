@@ -1,2 +1,4 @@
-# kitagentsdk/src/kitagentsdk/templates/requirements.txt.template
-kitagentsdk
+# src/kitagentsdk/templates/requirements.txt.template
+kitagentsdk==0.1.0
+stable-baselines3==2.2.1
+requests==2.32.3

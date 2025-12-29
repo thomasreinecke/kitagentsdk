@@ -1,23 +1,35 @@
-# kitagentsdk/pyproject.toml
+# pyproject.toml
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=69.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "kitagentsdk"
 version = "0.1.0"
-authors = [
-  { name="Kit Platform Team" },
-]
-description = "SDK and command-line tools for developing agents for the Kit platform."
+description = "SDK and CLI for building Kit platform agents."
 readme = "README.md"
-requires-python = ">=3.8"
-classifiers = [
-    "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: MIT License",
-    "Operating System :: OS Independent",
+requires-python = ">=3.10"
+dependencies = [
+  "requests==2.32.3",
+  "stable-baselines3==2.2.1",
 ]
-dependencies = []
+
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "License :: Other/Proprietary License",
+  "Operating System :: OS Independent",
+]
 
 [project.scripts]
 kitagentcli = "kitagentsdk.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+kitagentsdk = ["templates/*.template"]
