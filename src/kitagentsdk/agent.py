@@ -53,7 +53,11 @@ class BaseAgent(ABC):
             print(f"[EVENT] {event_name} ({status})", flush=True)
 
     def report_progress(self, step: int):
-        """Reports the current training step to a dedicated progress file."""
+        """Reports the current training step via the context socket."""
+        if self.context_client:
+            self.context_client.send_message({"type": "progress", "step": step})
+        
+        # Fallback: also write to file for local debugging or legacy support
         progress_file = self.output_path / "progress.log"
         with open(progress_file, "w") as f:
             f.write(str(step))
