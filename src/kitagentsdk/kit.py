@@ -1,6 +1,7 @@
 # src/kitagentsdk/kit.py
 import os
 import requests
+import json
 import logging
 from pathlib import Path
 from uuid import UUID
@@ -85,8 +86,25 @@ class KitClient:
 
     def get_training_data(self, params: dict) -> dict | None:
         """
-        Requests a fully prepared training dataset from the Kit backend.
+        Requests a fully prepared training dataset.
+        Checks for a locally injected file first (provided by kitexec cache), 
+        otherwise calls the Kit backend.
         """
+        # 1. Check for local data injection (Simulation Optimization)
+        local_data_path = os.getenv("KIT_LOCAL_DATA_PATH")
+        if local_data_path and os.path.exists(local_data_path):
+            msg = f"--- [SDK] Using locally injected data from {local_data_path} ---"
+            if self.agent: self.agent.log(msg)
+            else: print(msg)
+            try:
+                with open(local_data_path, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except Exception as e:
+                err_msg = f"Failed to load local data file: {e}. Falling back to API."
+                if self.agent: self.agent.log(err_msg)
+                else: print(err_msg)
+
+        # 2. Fallback to API Call
         if not self.enabled:
             msg = "Cannot get training data: KitClient is not enabled. Check .env file for KIT_API_ENDPOINT and KIT_API_KEY."
             if self.agent: self.agent.log(msg)
