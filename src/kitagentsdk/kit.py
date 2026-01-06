@@ -3,6 +3,7 @@ import os
 import requests
 import json
 import logging
+import sys
 from pathlib import Path
 from uuid import UUID
 
@@ -17,14 +18,14 @@ class KitClient:
         self.agent = None # This will be set by BaseAgent
         
         if not all([self.api_endpoint, self.api_key]):
-            # Use print for local runs as logger might not be configured by the agent script yet
-            print("--- [SDK-WARN] KitClient is missing KIT_API_ENDPOINT or KIT_API_KEY. API calls will be disabled. Check .env file. ---")
+            # Use stderr for local runs as logger might not be configured by the agent script yet
+            print("--- [SDK-WARN] KitClient is missing KIT_API_ENDPOINT or KIT_API_KEY. API calls will be disabled. Check .env file. ---", file=sys.stderr)
             self.enabled = False
         else:
             self.enabled = True
             self.headers = {"X-API-KEY": self.api_key, "Content-Type": "application/json"}
             if not self.run_id:
-                print("--- [SDK] KitClient initialized for local run (no KIT_RUN_ID detected). ---")
+                print("--- [SDK] KitClient initialized for local run (no KIT_RUN_ID detected). ---", file=sys.stderr)
 
     def download_artifact(self, artifact_id: UUID, destination_path: str | Path) -> bool:
         """
@@ -34,7 +35,7 @@ class KitClient:
             msg = "Cannot download artifact: KitClient is not enabled. Check .env file for KIT_API_ENDPOINT and KIT_API_KEY."
             # Use self.agent.log if available (in a kitexec run), otherwise print for local runs.
             if self.agent: self.agent.log(msg)
-            else: print(msg)
+            else: print(msg, file=sys.stderr)
             return False
 
         endpoint = f"{self.api_endpoint}/api/artifacts/{artifact_id}/download"
@@ -51,13 +52,13 @@ class KitClient:
         except requests.RequestException as e:
             msg = f"Failed to download artifact: {e}"
             if self.agent: self.agent.log(msg)
-            else: print(msg)
+            else: print(msg, file=sys.stderr)
             if self.agent: self.agent.emit_event("ARTIFACT_DOWNLOAD_FAILED", "failure")
             return False
         except IOError as e:
             msg = f"Failed to write artifact to disk: {e}"
             if self.agent: self.agent.log(msg)
-            else: print(msg)
+            else: print(msg, file=sys.stderr)
             if self.agent: self.agent.emit_event("ARTIFACT_DOWNLOAD_FAILED", "failure")
             return False
             
@@ -71,13 +72,13 @@ class KitClient:
         except requests.RequestException as e:
             msg = f"Failed to list artifacts for run {source_run_id}: {e}"
             if self.agent: self.agent.log(msg)
-            else: print(msg)
+            else: print(msg, file=sys.stderr)
             return False
 
         if not artifacts:
             msg = f"No artifacts found for run {source_run_id}."
             if self.agent: self.agent.log(msg)
-            else: print(msg)
+            else: print(msg, file=sys.stderr)
             return False
 
         for artifact in artifacts:
@@ -95,20 +96,37 @@ class KitClient:
         if local_data_path and os.path.exists(local_data_path):
             msg = f"--- [SDK] Using locally injected data from {local_data_path} ---"
             if self.agent: self.agent.log(msg)
-            else: print(msg)
+            else: print(msg, file=sys.stderr)
             try:
                 with open(local_data_path, 'r', encoding='utf-8') as f:
-                    return json.load(f)
+                    data = json.load(f)
+                    
+                # --- DEBUG VERBOSITY (Local) ---
+                print("\n=== [SDK] Local Data Inspection ===", file=sys.stderr)
+                for scale, content in data.items():
+                    if content and isinstance(content, str) and content != "null":
+                        try:
+                            parsed = json.loads(content)
+                            cols = parsed.get('columns', [])
+                            rows = parsed.get('data', [])
+                            print(f"Scale '{scale}': {len(rows)} rows | Cols: {cols}", file=sys.stderr)
+                            if rows:
+                                print(f"  First Row: {rows[0]}", file=sys.stderr)
+                        except Exception:
+                            pass
+                print("===================================\n", file=sys.stderr)
+                # ------------------------------
+                return data
             except Exception as e:
                 err_msg = f"Failed to load local data file: {e}. Falling back to API."
                 if self.agent: self.agent.log(err_msg)
-                else: print(err_msg)
+                else: print(err_msg, file=sys.stderr)
 
         # 2. Fallback to API Call
         if not self.enabled:
             msg = "Cannot get training data: KitClient is not enabled. Check .env file for KIT_API_ENDPOINT and KIT_API_KEY."
             if self.agent: self.agent.log(msg)
-            else: print(msg)
+            else: print(msg, file=sys.stderr)
             return None
         
         endpoint = f"{self.api_endpoint}/api/data/training_set"
@@ -118,22 +136,40 @@ class KitClient:
             response = requests.post(endpoint, json=params, headers=self.headers, timeout=300)
             response.raise_for_status()
             if self.agent: self.agent.emit_event("TRAINING_DATA_RECEIVED", "success")
-            return response.json()
+            
+            data = response.json()
+            
+            # --- DEBUG VERBOSITY (API) ---
+            print("\n=== [SDK] API Data Inspection ===", file=sys.stderr)
+            for scale, content in data.items():
+                if content and isinstance(content, str) and content != "null":
+                    try:
+                        parsed = json.loads(content)
+                        cols = parsed.get('columns', [])
+                        rows = parsed.get('data', [])
+                        print(f"Scale '{scale}': {len(rows)} rows | Cols: {cols}", file=sys.stderr)
+                        if rows:
+                            print(f"  First Row: {rows[0]}", file=sys.stderr)
+                    except Exception:
+                        pass
+            print("=================================\n", file=sys.stderr)
+            # ---------------------------
+            
+            return data
         except requests.RequestException as e:
             msg = f"Failed to get training data: {e}"
             if self.agent: self.agent.log(msg)
-            else: print(msg)
+            else: print(msg, file=sys.stderr)
             if self.agent: self.agent.emit_event("TRAINING_DATA_FAILED", "failure")
             
-            # Try to parse the JSON error response from the backend for a clearer message.
             if hasattr(e, 'response') and e.response is not None:
                 try:
                     error_detail = e.response.json().get("detail", e.response.text)
                     err_body = f"Response body: {error_detail}"
                     if self.agent: self.agent.log(err_body)
-                    else: print(err_body)
+                    else: print(err_body, file=sys.stderr)
                 except Exception:
                     err_body = f"Response body: {e.response.text}"
                     if self.agent: self.agent.log(err_body)
-                    else: print(err_body)
+                    else: print(err_body, file=sys.stderr)
             return None
