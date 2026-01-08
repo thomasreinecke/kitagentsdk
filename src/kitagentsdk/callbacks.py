@@ -1,5 +1,6 @@
 # src/kitagentsdk/callbacks.py
 import os
+from pathlib import Path
 from stable_baselines3.common.callbacks import BaseCallback
 import numpy as np
 
@@ -20,6 +21,7 @@ class KitLogCallback(BaseCallback):
     """
     Handles basic progress reporting via the KitAgentSDK.
     Also reports high-level training state (Rollout vs Optimization).
+    Checks for graceful stop signals from the executor.
     """
     def __init__(self, offset: int = 0, verbose: int = 0):
         super().__init__(verbose)
@@ -27,6 +29,7 @@ class KitLogCallback(BaseCallback):
         self.offset = offset
         self.current_cycle = 0
         self.total_cycles = 0
+        self._stop_signal_file = Path("STOP_REQUESTED")
 
     def _init_agent(self):
         if not self.agent and self.training_env:
@@ -71,6 +74,22 @@ class KitLogCallback(BaseCallback):
         relative_step = max(0, self.num_timesteps - self.offset)
         if self.agent:
             self.agent.report_progress(relative_step)
+
+        # --- Graceful Stop Logic ---
+        # Check if the stop signal file exists
+        if self._stop_signal_file.exists():
+            # Only stop at the end of a rollout (n_steps) to ensure the model is in a consistent state
+            # for future fine-tuning. PPO updates happen after n_steps.
+            n_steps = getattr(self.model, 'n_steps', 2048)
+            
+            # self.num_timesteps is the total steps taken so far.
+            # SB3 PPO collects `n_steps` then updates. We are inside `on_step`, so we check modulus.
+            if self.num_timesteps % n_steps == 0:
+                if self.agent:
+                    self.agent.log(f"🛑 Graceful stop requested. Stopping training at step {self.num_timesteps} (aligned to {n_steps}).")
+                    self.agent.emit_event("TRAINING_STOPPED_GRACEFULLY", "warning")
+                return False # Stops training
+
         return True
 
 class SB3MetricsCallback(BaseCallback):
