@@ -48,6 +48,9 @@ class KitClient:
         stop_file = Path("STOP_REQUESTED")
         pause_file = Path("PAUSE_REQUESTED")
 
+        # Increase interval to reduce server load
+        polling_interval = 3.0
+
         while not self._stop_event.is_set():
             try:
                 self._flush_metrics()
@@ -71,18 +74,29 @@ class KitClient:
                         print(f"--- [SDK] Command Received: RESUME. Removing signal file. ---", file=sys.stderr)
                         self.log_message("▶️ Received remote RESUME command.\n")
                 
-                time.sleep(1.0)
+                time.sleep(polling_interval)
             except Exception as e:
-                print(f"[SDK-ERR] Telemetry worker error: {e}", file=sys.stderr)
-                time.sleep(5.0) # Backoff on crash
+                # Log error but don't crash thread
+                # Reduce noise for connection refused if server is restarting
+                err_str = str(e)
+                if "Connection refused" in err_str:
+                    print(f"[SDK-WARN] Connection refused (server down?). Retrying...", file=sys.stderr)
+                else:
+                    print(f"[SDK-ERR] Telemetry worker error: {e}", file=sys.stderr)
+                
+                time.sleep(5.0) # Backoff
         
         # Flush one last time on exit handled by shutdown() method explicitly
 
     def _poll_command(self):
         if not self.enabled or not self.run_id: return None
         try:
-            # Short timeout for polling to not block the thread too long
-            resp = requests.get(f"{self.api_endpoint}/api/telemetry/command/{self.run_id}", headers=self.headers, timeout=2)
+            # Increase timeout to 10s to handle server load spikes
+            resp = requests.get(
+                f"{self.api_endpoint}/api/telemetry/command/{self.run_id}", 
+                headers=self.headers, 
+                timeout=10
+            )
             if resp.status_code == 200:
                 data = resp.json()
                 return data.get("command")
@@ -90,8 +104,8 @@ class KitClient:
                 # Log unexpected status codes (e.g. 500, 404) to help debug
                 print(f"[SDK-ERR] Poll command failed. Status: {resp.status_code}", file=sys.stderr)
         except Exception as e:
-            # Log connection errors instead of silencing them
-            print(f"[SDK-ERR] Poll command connection error: {e}", file=sys.stderr)
+            # Re-raise to be handled by worker loop backoff
+            raise e
         return None
 
     def _flush_metrics(self):
@@ -105,7 +119,7 @@ class KitClient:
         if not batch: return
         payload = {"run_id": self.run_id, "metrics": batch}
         try:
-            requests.post(f"{self.api_endpoint}/api/telemetry/metrics", json=payload, headers=self.headers, timeout=5)
+            requests.post(f"{self.api_endpoint}/api/telemetry/metrics", json=payload, headers=self.headers, timeout=10)
         except Exception as e:
             print(f"[SDK-ERR] Metrics push failed: {e}", file=sys.stderr)
 
@@ -114,7 +128,7 @@ class KitClient:
             try:
                 msg = self._log_queue.get_nowait()
                 payload = {"run_id": self.run_id, "message": msg}
-                requests.post(f"{self.api_endpoint}/api/telemetry/log", json=payload, headers=self.headers, timeout=5)
+                requests.post(f"{self.api_endpoint}/api/telemetry/log", json=payload, headers=self.headers, timeout=10)
             except Empty:
                 break
             except Exception as e:
@@ -130,7 +144,7 @@ class KitClient:
         if latest_step is not None:
             payload = {"run_id": self.run_id, "step": latest_step}
             try:
-                requests.post(f"{self.api_endpoint}/api/telemetry/progress", json=payload, headers=self.headers, timeout=5)
+                requests.post(f"{self.api_endpoint}/api/telemetry/progress", json=payload, headers=self.headers, timeout=10)
             except Exception as e:
                 print(f"[SDK-ERR] Progress push failed: {e}", file=sys.stderr)
 
@@ -173,7 +187,7 @@ class KitClient:
             # Send immediately via main thread for events, don't queue
             payload = {"event": event_name, "status": status}
             try:
-                requests.post(f"{self.api_endpoint}/api/telemetry/event/{self.run_id}", json=payload, headers=self.headers, timeout=5)
+                requests.post(f"{self.api_endpoint}/api/telemetry/event/{self.run_id}", json=payload, headers=self.headers, timeout=10)
             except Exception as e:
                 print(f"[SDK-ERR] Event send failed: {e}", file=sys.stderr)
         else:
@@ -183,7 +197,7 @@ class KitClient:
         if self.enabled and self.run_id:
             payload = {"run_id": self.run_id, "step": total_steps}
             try:
-                requests.post(f"{self.api_endpoint}/api/telemetry/total_steps", json=payload, headers=self.headers, timeout=5)
+                requests.post(f"{self.api_endpoint}/api/telemetry/total_steps", json=payload, headers=self.headers, timeout=10)
             except Exception as e:
                 print(f"[SDK-ERR] Total steps update failed: {e}", file=sys.stderr)
 
@@ -211,6 +225,7 @@ class KitClient:
         print(f"--- [SDK] Uploading artifact: {os.path.basename(file_path)}... ---", file=sys.stderr)
         endpoint = f"{self.api_endpoint}/api/runs/{self.run_id}/artifacts"
         
+        # Create headers without 'Content-Type' for multipart upload
         upload_headers = self.headers.copy()
         upload_headers.pop("Content-Type", None)
 
@@ -284,6 +299,7 @@ class KitClient:
         endpoint = f"{self.api_endpoint}/api/data/training_set"
         try:
             if self.agent: self.agent.emit_event("TRAINING_DATA_REQUESTED")
+            # Increase timeout for large data requests
             response = requests.post(endpoint, json=params, headers=self.headers, timeout=300)
             response.raise_for_status()
             if self.agent: self.agent.emit_event("TRAINING_DATA_RECEIVED", "success")
