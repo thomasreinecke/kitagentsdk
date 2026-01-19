@@ -1,5 +1,6 @@
 # src/kitagentsdk/callbacks.py
 import os
+import time
 from pathlib import Path
 from stable_baselines3.common.callbacks import BaseCallback
 import numpy as np
@@ -30,6 +31,7 @@ class KitLogCallback(BaseCallback):
         self.current_cycle = 0
         self.total_cycles = 0
         self._stop_signal_file = Path("STOP_REQUESTED")
+        self._pause_signal_file = Path("PAUSE_REQUESTED")
 
     def _init_agent(self):
         if not self.agent and self.training_env:
@@ -74,6 +76,20 @@ class KitLogCallback(BaseCallback):
         relative_step = max(0, self.num_timesteps - self.offset)
         if self.agent:
             self.agent.report_progress(relative_step)
+
+        # --- Pause Logic ---
+        if self._pause_signal_file.exists():
+            if self.agent:
+                self.agent.log(f"⏸️ Pause requested at step {self.num_timesteps}. Holding execution...")
+                self.agent.emit_event("TRAINING_PAUSED", "warning")
+            
+            # Wait loop - holding state
+            while self._pause_signal_file.exists():
+                time.sleep(1)
+            
+            if self.agent:
+                self.agent.log(f"▶️ Resume requested. Continuing training...")
+                self.agent.emit_event("TRAINING_RESUMED", "info")
 
         # --- Graceful Stop Logic ---
         # Check if the stop signal file exists
