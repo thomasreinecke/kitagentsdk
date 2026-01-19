@@ -19,9 +19,7 @@ class BaseAgent(ABC):
         self.kit = KitClient()
         self.config = {}
 
-        # Logic to determine configuration source
         if config_path and os.path.exists(config_path):
-            # 1. Local file takes precedence (Standard / Dev Mode)
             try:
                 with open(config_path, 'r') as f:
                     self.config = json.load(f)
@@ -29,24 +27,14 @@ class BaseAgent(ABC):
                 print(f"❌ Failed to load local config: {e}", file=sys.stderr)
                 sys.exit(1)
         elif self.kit.enabled and self.kit.run_id:
-            # 2. Remote Fetch (Headless Mode)
             print(f"--- [SDK] No local config provided. Fetching config for Run ID: {self.kit.run_id} ---", file=sys.stderr)
             remote_config = self.kit.get_run_config()
             if remote_config:
                 self.config = remote_config
-                # Persist to disk for reference/debugging
-                try:
-                    dump_path = self.output_path / "config.json"
-                    with open(dump_path, "w") as f:
-                        json.dump(self.config, f, indent=2)
-                    print(f"--- [SDK] Config fetched and saved to {dump_path} ---", file=sys.stderr)
-                except Exception:
-                    pass
             else:
                 print("❌ Failed to fetch configuration from Kit API. Aborting.", file=sys.stderr)
                 sys.exit(1)
         else:
-            # 3. Failure
             print("❌ No configuration found. Provide --config or ensure KIT_API_ENDPOINT/KEY/RUN_ID are set.", file=sys.stderr)
             sys.exit(1)
 
@@ -59,17 +47,14 @@ class BaseAgent(ABC):
             self.emit_event("SDK_INITIALIZED")
 
     def log(self, message: str):
-        """Logs a message, sending it to the backend via KitClient if available."""
         message = message.rstrip()
         if not message: return
         self.kit.log_message(message + "\n")
 
     def emit_event(self, event_name: str, status: str = "info"):
-        """Emits a lifecycle event."""
         self.kit.log_event(event_name, status)
 
     def report_progress(self, step: int):
-        """Reports the current training step."""
         self.kit.log_progress(step)
         
         # Fallback for local legacy debugging
@@ -78,7 +63,6 @@ class BaseAgent(ABC):
             f.write(str(step))
 
     def record_metric(self, name: str, step: int, value: float):
-        """Records a key-step-value metric."""
         self.kit.log_metric(name, step, value)
 
     def orchestrate_sb3_training(
@@ -89,12 +73,13 @@ class BaseAgent(ABC):
         total_timesteps: int,
         custom_callbacks: list = None,
     ):
-        """
-        Handles the complete, standardized training lifecycle for a Stable Baselines 3 model.
-        """
         final_model_path = self.output_path / "model.zip"
         temp_model_path = self.output_path / "model_temp.zip"
         norm_stats_path = self.output_path / "norm_stats.json"
+        
+        planned_total = int(self.config.get("timesteps", total_timesteps))
+        if self.kit.enabled:
+             self.kit.update_total_steps(planned_total)
 
         from stable_baselines3.common.callbacks import CallbackList
         from .callbacks import InterimSaveCallback, KitLogCallback, SB3MetricsCallback
@@ -136,21 +121,25 @@ class BaseAgent(ABC):
             
             if os.path.exists(temp_model_path):
                 os.remove(temp_model_path)
+            
+            # --- FIX: Explicitly mark as finished for Headless runs ---
+            self.emit_event("RUN_FINISHED", "success")
 
         except KeyboardInterrupt:
             self.log("--- 🛑 Training interrupted by user. ---")
-            sys.exit(0) # Graceful exit on Ctrl+C
+            # We don't emit FAILED here because the user might have killed it manually locally
+            # In KitExec context, SIGKILL is handled by JobRunner.
+            sys.exit(0)
         except Exception as e:
             self.log(f"--- ❌ An unexpected error occurred during training: {e} ---")
             self.emit_event("AGENT_TRAINING_FAILED", "failure")
+            self.emit_event("RUN_FAILED", "failure") # Ensure state flip
             raise e
 
     @abstractmethod
     def train(self):
-        """The main training logic for the agent."""
         pass
 
     @abstractmethod
     def test(self):
-        """The main testing/backtesting logic for the agent."""
         pass
