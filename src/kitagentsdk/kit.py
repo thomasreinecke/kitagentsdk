@@ -49,42 +49,55 @@ class KitClient:
         pause_file = Path("PAUSE_REQUESTED")
 
         while not self._stop_event.is_set():
+            try:
+                self._flush_metrics()
+                self._flush_logs()
+                self._flush_progress()
+                
+                cmd = self._poll_command()
+                if cmd == "stop":
+                    if not stop_file.exists():
+                        stop_file.touch()
+                        print(f"--- [SDK] Command Received: STOP. Creating signal file. ---", file=sys.stderr)
+                        self.log_message("🛑 Received remote STOP command.\n")
+                elif cmd == "pause":
+                    if not pause_file.exists():
+                        pause_file.touch()
+                        print(f"--- [SDK] Command Received: PAUSE. Creating signal file. ---", file=sys.stderr)
+                        self.log_message("⏸️ Received remote PAUSE command.\n")
+                elif cmd == "resume":
+                    if pause_file.exists():
+                        pause_file.unlink()
+                        print(f"--- [SDK] Command Received: RESUME. Removing signal file. ---", file=sys.stderr)
+                        self.log_message("▶️ Received remote RESUME command.\n")
+                
+                time.sleep(1.0)
+            except Exception as e:
+                print(f"[SDK-ERR] Telemetry worker error: {e}", file=sys.stderr)
+                time.sleep(5.0) # Backoff on crash
+        
+        # Flush one last time on exit
+        try:
             self._flush_metrics()
             self._flush_logs()
             self._flush_progress()
-            
-            cmd = self._poll_command()
-            if cmd == "stop":
-                if not stop_file.exists():
-                    stop_file.touch()
-                    print(f"--- [SDK] Command Received: STOP. Creating signal file. ---", file=sys.stderr)
-                    self.log_message("🛑 Received remote STOP command.\n")
-            elif cmd == "pause":
-                if not pause_file.exists():
-                    pause_file.touch()
-                    print(f"--- [SDK] Command Received: PAUSE. Creating signal file. ---", file=sys.stderr)
-                    self.log_message("⏸️ Received remote PAUSE command.\n")
-            elif cmd == "resume":
-                if pause_file.exists():
-                    pause_file.unlink()
-                    print(f"--- [SDK] Command Received: RESUME. Removing signal file. ---", file=sys.stderr)
-                    self.log_message("▶️ Received remote RESUME command.\n")
-            
-            time.sleep(1.0) 
-        
-        self._flush_metrics()
-        self._flush_logs()
-        self._flush_progress()
+        except Exception:
+            pass
 
     def _poll_command(self):
         if not self.enabled or not self.run_id: return None
         try:
+            # Short timeout for polling to not block the thread too long
             resp = requests.get(f"{self.api_endpoint}/api/telemetry/command/{self.run_id}", headers=self.headers, timeout=2)
             if resp.status_code == 200:
                 data = resp.json()
                 return data.get("command")
-        except Exception:
-            pass
+            elif resp.status_code != 200:
+                # Log unexpected status codes (e.g. 500, 404) to help debug
+                print(f"[SDK-ERR] Poll command failed. Status: {resp.status_code}", file=sys.stderr)
+        except Exception as e:
+            # Log connection errors instead of silencing them
+            print(f"[SDK-ERR] Poll command connection error: {e}", file=sys.stderr)
         return None
 
     def _flush_metrics(self):
@@ -184,17 +197,15 @@ class KitClient:
         print(f"--- [SDK] Uploading artifact: {os.path.basename(file_path)}... ---", file=sys.stderr)
         endpoint = f"{self.api_endpoint}/api/runs/{self.run_id}/artifacts"
         
-        # --- FIX: Create headers without 'Content-Type' for multipart upload ---
-        # Requests will auto-generate the correct boundary if Content-Type is missing.
+        # Create headers without 'Content-Type' for multipart upload
         upload_headers = self.headers.copy()
         upload_headers.pop("Content-Type", None)
 
         try:
             with open(file_path, 'rb') as f:
-                # FIX: Added explicit MIME type 'application/octet-stream' to file tuple
+                # Explicit MIME type 'application/octet-stream' to prevent 422 errors
                 files = {'file': (os.path.basename(file_path), f, 'application/octet-stream')}
                 data = {'artifact_type': artifact_type}
-                # Use upload_headers here, NOT self.headers
                 resp = requests.post(endpoint, files=files, data=data, headers=upload_headers, timeout=600)
                 
                 if resp.status_code != 200:
