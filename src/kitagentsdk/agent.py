@@ -2,81 +2,84 @@
 import json
 import os
 import sys
+import atexit
 from pathlib import Path
 from abc import ABC, abstractmethod
 from .kit import KitClient
 from stable_baselines3.common.base_class import BaseAlgorithm
 from stable_baselines3.common.vec_env import VecEnv
-from .context import ContextClient
 
 class BaseAgent(ABC):
     """Abstract base class for all Kit agents."""
 
-    def __init__(self, config_path: str, output_path: str):
+    def __init__(self, config_path: str | None, output_path: str):
         self.output_path = Path(output_path)
         self.output_path.mkdir(parents=True, exist_ok=True)
         
-        try:
-            with open(config_path, 'r') as f:
-                self.config = json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError):
-            self.config = {}
-
-        self.context_client = None
-        self.is_test_run = False # Flag to indicate if running in test/simulation mode
-        context_path = os.getenv("KIT_CONTEXT_PATH")
-        if context_path:
-            self.context_client = ContextClient(context_path)
-        
         self.kit = KitClient()
-        self.kit.agent = self  # Give KitClient a reference back to the agent for event emitting
+        self.config = {}
 
-        if self.context_client:
+        # Logic to determine configuration source
+        if config_path and os.path.exists(config_path):
+            # 1. Local file takes precedence (Standard / Dev Mode)
+            try:
+                with open(config_path, 'r') as f:
+                    self.config = json.load(f)
+            except json.JSONDecodeError as e:
+                print(f"❌ Failed to load local config: {e}", file=sys.stderr)
+                sys.exit(1)
+        elif self.kit.enabled and self.kit.run_id:
+            # 2. Remote Fetch (Headless Mode)
+            print(f"--- [SDK] No local config provided. Fetching config for Run ID: {self.kit.run_id} ---", file=sys.stderr)
+            remote_config = self.kit.get_run_config()
+            if remote_config:
+                self.config = remote_config
+                # Persist to disk for reference/debugging
+                try:
+                    dump_path = self.output_path / "config.json"
+                    with open(dump_path, "w") as f:
+                        json.dump(self.config, f, indent=2)
+                    print(f"--- [SDK] Config fetched and saved to {dump_path} ---", file=sys.stderr)
+                except Exception:
+                    pass
+            else:
+                print("❌ Failed to fetch configuration from Kit API. Aborting.", file=sys.stderr)
+                sys.exit(1)
+        else:
+            # 3. Failure
+            print("❌ No configuration found. Provide --config or ensure KIT_API_ENDPOINT/KEY/RUN_ID are set.", file=sys.stderr)
+            sys.exit(1)
+
+        self.is_test_run = False 
+        
+        self.kit.agent = self 
+        atexit.register(self.kit.shutdown)
+
+        if self.kit.enabled and self.kit.run_id:
             self.emit_event("SDK_INITIALIZED")
 
     def log(self, message: str):
-        """Logs a message, sending it to the context server if available, otherwise printing."""
-        if self.context_client:
-            # Ensure the message has a newline for proper concatenation in the DB.
-            log_message = message if message.endswith('\n') else message + '\n'
-            self.context_client.log(log_message)
-        else:
-            # print() adds its own newline, so we send the original message.
-            print(message, flush=True)
+        """Logs a message, sending it to the backend via KitClient if available."""
+        message = message.rstrip()
+        if not message: return
+        self.kit.log_message(message + "\n")
 
     def emit_event(self, event_name: str, status: str = "info"):
-        """Emits a lifecycle event to the context server if available."""
-        if self.context_client:
-            self.context_client.emit_event(event_name, status)
-        elif not self.is_test_run:
-            # Fallback for local debugging, but suppress during test runs
-            print(f"[EVENT] {event_name} ({status})", flush=True)
+        """Emits a lifecycle event."""
+        self.kit.log_event(event_name, status)
 
     def report_progress(self, step: int):
-        """Reports the current training step via the context socket."""
-        if self.context_client:
-            self.context_client.send_message({"type": "progress", "step": step})
+        """Reports the current training step."""
+        self.kit.log_progress(step)
         
-        # Fallback: also write to file for local debugging or legacy support
+        # Fallback for local legacy debugging
         progress_file = self.output_path / "progress.log"
         with open(progress_file, "w") as f:
             f.write(str(step))
 
     def record_metric(self, name: str, step: int, value: float):
-        """Records a key-step-value metric, sending it to the context server."""
-        if self.context_client:
-            payload = {
-                "type": "metric",
-                "name": name,
-                "step": step,
-                "value": value
-            }
-            self.context_client.send_message(payload)
-        else:
-            # Fallback for local testing without an executor
-            metrics_file = self.output_path / "metrics.log"
-            with open(metrics_file, "a") as f:
-                f.write(f"{step},{name},{value}\n")
+        """Records a key-step-value metric."""
+        self.kit.log_metric(name, step, value)
 
     def orchestrate_sb3_training(
         self,
@@ -98,10 +101,6 @@ class BaseAgent(ABC):
 
         checkpoint_freq = self.config.get("checkpoint_freq", 10000)
         
-        # --- FIX: Calculate offset for progress reporting ---
-        # If we are resuming (is_new_model=False), model.num_timesteps contains the 
-        # cumulative steps from previous runs. We need to subtract this from the 
-        # current num_timesteps in the callback to report only the steps done in THIS stage.
         progress_offset = 0
         if not is_new_model:
             progress_offset = model.num_timesteps
@@ -126,11 +125,13 @@ class BaseAgent(ABC):
 
             self.emit_event("MODEL_SAVING_STARTED")
             model.save(final_model_path)
+            self.kit.upload_artifact(str(final_model_path), "model")
             self.emit_event("MODEL_SAVED", "success")
 
             if is_new_model:
                 with open(norm_stats_path, 'w') as f:
                     json.dump(env.envs[0].unwrapped.get_norm_stats(), f, indent=4)
+                self.kit.upload_artifact(str(norm_stats_path), "normalization_stats")
                 self.log(f"Saved normalization stats to {norm_stats_path}")
             
             if os.path.exists(temp_model_path):
