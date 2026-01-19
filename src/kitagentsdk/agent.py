@@ -110,6 +110,8 @@ class BaseAgent(ABC):
 
             self.emit_event("MODEL_SAVING_STARTED")
             model.save(final_model_path)
+            
+            # These calls now raise exceptions if they fail, ensuring we don't prematurely complete the run
             self.kit.upload_artifact(str(final_model_path), "model")
             self.emit_event("MODEL_SAVED", "success")
 
@@ -122,8 +124,10 @@ class BaseAgent(ABC):
             if os.path.exists(temp_model_path):
                 os.remove(temp_model_path)
             
-            # --- FIX: Explicitly mark as finished for Headless runs ---
             self.emit_event("RUN_FINISHED", "success")
+            
+            # Explicitly shutdown to ensure all events (like RUN_FINISHED) are flushed
+            self.kit.shutdown()
 
         except KeyboardInterrupt:
             self.log("--- 🛑 Training interrupted by user. ---")
@@ -134,6 +138,7 @@ class BaseAgent(ABC):
             self.log(f"--- ❌ An unexpected error occurred during training: {e} ---")
             self.emit_event("AGENT_TRAINING_FAILED", "failure")
             self.emit_event("RUN_FAILED", "failure") # Ensure state flip
+            self.kit.shutdown() # Attempt flush even on error
             raise e
 
     @abstractmethod

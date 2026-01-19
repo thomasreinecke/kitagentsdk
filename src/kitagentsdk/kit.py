@@ -6,7 +6,7 @@ import logging
 import sys
 import threading
 import time
-from queue import Queue
+from queue import Queue, Empty
 from pathlib import Path
 from uuid import UUID
 
@@ -76,13 +76,7 @@ class KitClient:
                 print(f"[SDK-ERR] Telemetry worker error: {e}", file=sys.stderr)
                 time.sleep(5.0) # Backoff on crash
         
-        # Flush one last time on exit
-        try:
-            self._flush_metrics()
-            self._flush_logs()
-            self._flush_progress()
-        except Exception:
-            pass
+        # Flush one last time on exit handled by shutdown() method explicitly
 
     def _poll_command(self):
         if not self.enabled or not self.run_id: return None
@@ -104,7 +98,10 @@ class KitClient:
         if self._metrics_queue.empty(): return
         batch = []
         while not self._metrics_queue.empty() and len(batch) < 100:
-            batch.append(self._metrics_queue.get())
+            try:
+                batch.append(self._metrics_queue.get_nowait())
+            except Empty:
+                break
         if not batch: return
         payload = {"run_id": self.run_id, "metrics": batch}
         try:
@@ -114,17 +111,22 @@ class KitClient:
 
     def _flush_logs(self):
         while not self._log_queue.empty():
-            msg = self._log_queue.get()
-            payload = {"run_id": self.run_id, "message": msg}
             try:
+                msg = self._log_queue.get_nowait()
+                payload = {"run_id": self.run_id, "message": msg}
                 requests.post(f"{self.api_endpoint}/api/telemetry/log", json=payload, headers=self.headers, timeout=5)
+            except Empty:
+                break
             except Exception as e:
                 print(f"[SDK-ERR] Log push failed: {e}", file=sys.stderr)
     
     def _flush_progress(self):
         latest_step = None
         while not self._progress_queue.empty():
-            latest_step = self._progress_queue.get()
+            try:
+                latest_step = self._progress_queue.get_nowait()
+            except Empty:
+                break
         if latest_step is not None:
             payload = {"run_id": self.run_id, "step": latest_step}
             try:
@@ -133,10 +135,21 @@ class KitClient:
                 print(f"[SDK-ERR] Progress push failed: {e}", file=sys.stderr)
 
     def shutdown(self):
-        if hasattr(self, '_stop_event'):
+        """Cleanly shuts down the client, flushing all pending data."""
+        if hasattr(self, '_stop_event') and not self._stop_event.is_set():
+            print("--- [SDK] Shutting down telemetry client... ---", file=sys.stderr)
             self._stop_event.set()
             if self._telemetry_thread.is_alive():
-                self._telemetry_thread.join(timeout=2.0)
+                self._telemetry_thread.join(timeout=3.0)
+            
+            # Explicit synchronous flush of any remaining items
+            try:
+                self._flush_metrics()
+                self._flush_logs()
+                self._flush_progress()
+                print("--- [SDK] Telemetry flushed. ---", file=sys.stderr)
+            except Exception as e:
+                print(f"[SDK-ERR] Final flush error: {e}", file=sys.stderr)
 
     # --- Telemetry Methods ---
 
@@ -157,6 +170,7 @@ class KitClient:
     def log_event(self, event_name: str, status: str = "info"):
         if self.enabled and self.run_id:
             print(f"--- [SDK] Event: {event_name} ({status}) ---", file=sys.stderr)
+            # Send immediately via main thread for events, don't queue
             payload = {"event": event_name, "status": status}
             try:
                 requests.post(f"{self.api_endpoint}/api/telemetry/event/{self.run_id}", json=payload, headers=self.headers, timeout=5)
@@ -197,7 +211,6 @@ class KitClient:
         print(f"--- [SDK] Uploading artifact: {os.path.basename(file_path)}... ---", file=sys.stderr)
         endpoint = f"{self.api_endpoint}/api/runs/{self.run_id}/artifacts"
         
-        # Create headers without 'Content-Type' for multipart upload
         upload_headers = self.headers.copy()
         upload_headers.pop("Content-Type", None)
 
@@ -214,7 +227,9 @@ class KitClient:
 
                 print(f"--- [SDK] Upload success: {os.path.basename(file_path)} ---", file=sys.stderr)
         except Exception as e:
+            # FATAL ERROR: Re-raise so the agent knows upload failed and can exit/retry
             print(f"[SDK-ERR] Upload failed for {file_path}: {e}", file=sys.stderr)
+            raise e
 
     def download_artifact(self, artifact_id: UUID, destination_path: str | Path) -> bool:
         if not self.enabled: return False
