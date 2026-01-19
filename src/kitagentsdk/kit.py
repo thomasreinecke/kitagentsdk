@@ -20,12 +20,18 @@ class KitClient:
         self.run_id = os.getenv("KIT_RUN_ID")
         self.agent = None 
         
+        # Strip trailing slash if present to avoid double slashes in URLs
+        if self.api_endpoint and self.api_endpoint.endswith('/'):
+            self.api_endpoint = self.api_endpoint[:-1]
+        
         if not all([self.api_endpoint, self.api_key]):
             print("--- [SDK-WARN] KitClient missing credentials. API disabled. ---", file=sys.stderr)
             self.enabled = False
         else:
             self.enabled = True
+            # Default headers for JSON endpoints
             self.headers = {"X-API-KEY": self.api_key, "Content-Type": "application/json"}
+            
             if not self.run_id:
                 print("--- [SDK] Initialized in Local Mode (No Run ID). ---", file=sys.stderr)
             else:
@@ -47,7 +53,6 @@ class KitClient:
             self._flush_logs()
             self._flush_progress()
             
-            # Poll for commands
             cmd = self._poll_command()
             if cmd == "stop":
                 if not stop_file.exists():
@@ -67,7 +72,6 @@ class KitClient:
             
             time.sleep(1.0) 
         
-        # Final flush
         self._flush_metrics()
         self._flush_logs()
         self._flush_progress()
@@ -139,9 +143,7 @@ class KitClient:
         
     def log_event(self, event_name: str, status: str = "info"):
         if self.enabled and self.run_id:
-            # Verbose Console Log
             print(f"--- [SDK] Event: {event_name} ({status}) ---", file=sys.stderr)
-            
             payload = {"event": event_name, "status": status}
             try:
                 requests.post(f"{self.api_endpoint}/api/telemetry/event/{self.run_id}", json=payload, headers=self.headers, timeout=5)
@@ -181,19 +183,30 @@ class KitClient:
         
         print(f"--- [SDK] Uploading artifact: {os.path.basename(file_path)}... ---", file=sys.stderr)
         endpoint = f"{self.api_endpoint}/api/runs/{self.run_id}/artifacts"
+        
+        # --- FIX: Create headers without 'Content-Type' for multipart upload ---
+        # Requests will auto-generate the correct boundary if Content-Type is missing.
+        upload_headers = self.headers.copy()
+        upload_headers.pop("Content-Type", None)
+
         try:
             with open(file_path, 'rb') as f:
-                files = {'file': (os.path.basename(file_path), f)}
+                # FIX: Added explicit MIME type 'application/octet-stream' to file tuple
+                files = {'file': (os.path.basename(file_path), f, 'application/octet-stream')}
                 data = {'artifact_type': artifact_type}
-                resp = requests.post(endpoint, files=files, data=data, headers=self.headers, timeout=600)
-                resp.raise_for_status()
+                # Use upload_headers here, NOT self.headers
+                resp = requests.post(endpoint, files=files, data=data, headers=upload_headers, timeout=600)
+                
+                if resp.status_code != 200:
+                     print(f"--- [SDK-ERR] Backend returned {resp.status_code}: {resp.text} ---", file=sys.stderr)
+                     resp.raise_for_status()
+
                 print(f"--- [SDK] Upload success: {os.path.basename(file_path)} ---", file=sys.stderr)
         except Exception as e:
             print(f"[SDK-ERR] Upload failed for {file_path}: {e}", file=sys.stderr)
 
     def download_artifact(self, artifact_id: UUID, destination_path: str | Path) -> bool:
         if not self.enabled: return False
-        print(f"--- [SDK] Downloading artifact {artifact_id}... ---", file=sys.stderr)
         endpoint = f"{self.api_endpoint}/api/artifacts/{artifact_id}/download"
         try:
             if self.agent: self.agent.emit_event("ARTIFACT_DOWNLOAD_STARTED")
@@ -242,14 +255,12 @@ class KitClient:
 
         if not self.enabled: return None
         
-        print(f"--- [SDK] Fetching training data from API (this may take time)... ---", file=sys.stderr)
         endpoint = f"{self.api_endpoint}/api/data/training_set"
         try:
             if self.agent: self.agent.emit_event("TRAINING_DATA_REQUESTED")
             response = requests.post(endpoint, json=params, headers=self.headers, timeout=300)
             response.raise_for_status()
             if self.agent: self.agent.emit_event("TRAINING_DATA_RECEIVED", "success")
-            print(f"--- [SDK] Training data received. ---", file=sys.stderr)
             return response.json()
         except Exception as e:
             msg = f"Failed to get training data: {e}"
