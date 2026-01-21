@@ -20,6 +20,11 @@ class KitClient:
         self.run_id = os.getenv("KIT_RUN_ID")
         self.agent = None 
         
+        # Internal command state
+        self._stop_event = threading.Event()
+        self._pause_event = threading.Event()
+        self._snapshot_event = threading.Event()
+        
         # Strip trailing slash if present to avoid double slashes in URLs
         if self.api_endpoint and self.api_endpoint.endswith('/'):
             self.api_endpoint = self.api_endpoint[:-1]
@@ -39,19 +44,31 @@ class KitClient:
                 self._metrics_queue = Queue()
                 self._log_queue = Queue()
                 self._progress_queue = Queue()
-                self._stop_event = threading.Event()
+                self._shutdown_event = threading.Event()
                 self._telemetry_thread = threading.Thread(target=self._telemetry_worker, daemon=True)
                 self._telemetry_thread.start()
 
+    @property
+    def stop_requested(self) -> bool:
+        return self._stop_event.is_set()
+
+    @property
+    def pause_requested(self) -> bool:
+        return self._pause_event.is_set()
+
+    @property
+    def snapshot_requested(self) -> bool:
+        return self._snapshot_event.is_set()
+
+    def clear_snapshot_request(self):
+        self._snapshot_event.clear()
+
     def _telemetry_worker(self):
         """Background worker to flush metrics, logs, progress, and poll commands."""
-        stop_file = Path("STOP_REQUESTED")
-        pause_file = Path("PAUSE_REQUESTED")
-
         # Increase interval to reduce server load
         polling_interval = 3.0
 
-        while not self._stop_event.is_set():
+        while not self._shutdown_event.is_set():
             try:
                 self._flush_metrics()
                 self._flush_logs()
@@ -59,20 +76,25 @@ class KitClient:
                 
                 cmd = self._poll_command()
                 if cmd == "stop":
-                    if not stop_file.exists():
-                        stop_file.touch()
-                        print(f"--- [SDK] Command Received: STOP. Creating signal file. ---", file=sys.stderr)
+                    if not self._stop_event.is_set():
+                        self._stop_event.set()
+                        print(f"--- [SDK] Command Received: STOP. ---", file=sys.stderr)
                         self.log_message("🛑 Received remote STOP command.\n")
                 elif cmd == "pause":
-                    if not pause_file.exists():
-                        pause_file.touch()
-                        print(f"--- [SDK] Command Received: PAUSE. Creating signal file. ---", file=sys.stderr)
+                    if not self._pause_event.is_set():
+                        self._pause_event.set()
+                        print(f"--- [SDK] Command Received: PAUSE. ---", file=sys.stderr)
                         self.log_message("⏸️ Received remote PAUSE command.\n")
                 elif cmd == "resume":
-                    if pause_file.exists():
-                        pause_file.unlink()
-                        print(f"--- [SDK] Command Received: RESUME. Removing signal file. ---", file=sys.stderr)
+                    if self._pause_event.is_set():
+                        self._pause_event.clear()
+                        print(f"--- [SDK] Command Received: RESUME. ---", file=sys.stderr)
                         self.log_message("▶️ Received remote RESUME command.\n")
+                elif cmd == "snapshot":
+                    if not self._snapshot_event.is_set():
+                        self._snapshot_event.set()
+                        print(f"--- [SDK] Command Received: SNAPSHOT. ---", file=sys.stderr)
+                        self.log_message("📸 Received remote SNAPSHOT command.\n")
                 
                 time.sleep(polling_interval)
             except Exception as e:
@@ -150,9 +172,9 @@ class KitClient:
 
     def shutdown(self):
         """Cleanly shuts down the client, flushing all pending data."""
-        if hasattr(self, '_stop_event') and not self._stop_event.is_set():
+        if hasattr(self, '_shutdown_event') and not self._shutdown_event.is_set():
             print("--- [SDK] Shutting down telemetry client... ---", file=sys.stderr)
-            self._stop_event.set()
+            self._shutdown_event.set()
             if self._telemetry_thread.is_alive():
                 self._telemetry_thread.join(timeout=3.0)
             
@@ -217,7 +239,7 @@ class KitClient:
             print(f"[SDK-ERR] Config fetch failed: {e}", file=sys.stderr)
             return None
 
-    def upload_artifact(self, file_path: str, artifact_type: str = 'generic'):
+    def upload_artifact(self, file_path: str, artifact_type: str = 'generic', step: int = None):
         if not self.enabled or not self.run_id:
             print(f"[SDK] Upload skipped: SDK disabled.", file=sys.stderr)
             return
@@ -234,6 +256,9 @@ class KitClient:
                 # Explicit MIME type 'application/octet-stream' to prevent 422 errors
                 files = {'file': (os.path.basename(file_path), f, 'application/octet-stream')}
                 data = {'artifact_type': artifact_type}
+                if step is not None:
+                    data['step'] = str(step)
+                    
                 resp = requests.post(endpoint, files=files, data=data, headers=upload_headers, timeout=600)
                 
                 if resp.status_code != 200:

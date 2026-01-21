@@ -3,6 +3,7 @@ import json
 import os
 import sys
 import atexit
+import shutil
 from pathlib import Path
 from abc import ABC, abstractmethod
 from .kit import KitClient
@@ -111,19 +112,42 @@ class BaseAgent(ABC):
             self.emit_event("MODEL_SAVING_STARTED")
             model.save(final_model_path)
             
+            # Grab final step count for metadata
+            final_step = model.num_timesteps
+            
             # These calls now raise exceptions if they fail, ensuring we don't prematurely complete the run
-            self.kit.upload_artifact(str(final_model_path), "model")
+            self.kit.upload_artifact(str(final_model_path), "model", step=final_step)
             self.emit_event("MODEL_SAVED", "success")
 
-            if is_new_model:
-                with open(norm_stats_path, 'w') as f:
-                    json.dump(env.envs[0].unwrapped.get_norm_stats(), f, indent=4)
-                self.kit.upload_artifact(str(norm_stats_path), "normalization_stats")
-                self.log(f"Saved normalization stats to {norm_stats_path}")
+            # Always attempt to save normalization stats if the environment provides them.
+            try:
+                # Access the unwrapped environment to check for get_norm_stats
+                # VecEnvs wrap the actual env; we assume envs[0] is representative.
+                base_env = env.envs[0].unwrapped
+                if hasattr(base_env, "get_norm_stats"):
+                    stats = base_env.get_norm_stats()
+                    if stats:
+                        with open(norm_stats_path, 'w') as f:
+                            json.dump(stats, f, indent=4)
+                        self.kit.upload_artifact(str(norm_stats_path), "normalization_stats", step=final_step)
+                        self.log(f"Saved normalization stats to {norm_stats_path}")
+            except Exception as e:
+                self.log(f"⚠️ Could not save normalization stats: {e}")
             
             if os.path.exists(temp_model_path):
                 os.remove(temp_model_path)
             
+            # --- CLEANUP OF OUTPUT DIRECTORY ---
+            self.log("Cleaning up local output directory...")
+            for item in self.output_path.iterdir():
+                try:
+                    if item.is_dir():
+                        shutil.rmtree(item)
+                    else:
+                        item.unlink()
+                except Exception as e:
+                    print(f"[SDK-WARN] Failed to delete {item}: {e}", file=sys.stderr)
+
             self.emit_event("RUN_FINISHED", "success")
             
             # Explicitly shutdown to ensure all events (like RUN_FINISHED) are flushed

@@ -2,6 +2,7 @@
 import os
 import sys
 import time
+import json
 from pathlib import Path
 from stable_baselines3.common.callbacks import BaseCallback
 import numpy as np
@@ -20,7 +21,7 @@ class InterimSaveCallback(BaseCallback):
 
 class KitLogCallback(BaseCallback):
     """
-    Handles progress reporting, state logging, and graceful stopping.
+    Handles progress reporting, state logging, graceful stopping, and snapshotting.
     Includes console-based progress reporting every 1%.
     """
     def __init__(self, offset: int = 0, verbose: int = 0):
@@ -29,8 +30,6 @@ class KitLogCallback(BaseCallback):
         self.offset = offset
         self.current_cycle = 0
         self.total_cycles = 0
-        self._stop_signal_file = Path("STOP_REQUESTED")
-        self._pause_signal_file = Path("PAUSE_REQUESTED")
         
         # Progress tracking
         self._last_logged_pct = -1
@@ -82,27 +81,57 @@ class KitLogCallback(BaseCallback):
                 print(f"--- [SDK] Training Progress: {pct}% ({self.num_timesteps}/{total_ts}) ---", file=sys.stderr)
                 self._last_logged_pct = pct
 
-        # --- Pause Logic ---
-        if self._pause_signal_file.exists():
-            if self.agent:
+        if self.agent and self.agent.kit:
+            # --- Pause Logic ---
+            if self.agent.kit.pause_requested:
                 self.agent.log(f"⏸️ Pause requested at step {self.num_timesteps}. Holding execution...")
                 self.agent.emit_event("TRAINING_PAUSED", "warning")
-            
-            while self._pause_signal_file.exists():
-                time.sleep(1)
-            
-            if self.agent:
+                
+                while self.agent.kit.pause_requested:
+                    time.sleep(1)
+                
                 self.agent.log(f"▶️ Resume requested. Continuing training...")
                 self.agent.emit_event("TRAINING_RESUMED", "info")
 
-        # --- Graceful Stop Logic ---
-        if self._stop_signal_file.exists():
-            n_steps = getattr(self.model, 'n_steps', 2048)
-            if self.num_timesteps % n_steps == 0:
-                if self.agent:
+            # --- Graceful Stop Logic ---
+            if self.agent.kit.stop_requested:
+                n_steps = getattr(self.model, 'n_steps', 2048)
+                # Wait for cycle completion (rollout) before stopping
+                if self.num_timesteps % n_steps == 0:
                     self.agent.log(f"🛑 Graceful stop requested. Stopping training at step {self.num_timesteps}.")
                     self.agent.emit_event("TRAINING_STOPPED_GRACEFULLY", "warning")
-                return False 
+                    return False 
+
+            # --- Snapshot Logic ---
+            if self.agent.kit.snapshot_requested:
+                self.agent.log(f"📸 Snapshot requested. Capturing state at step {self.num_timesteps}...")
+                
+                try:
+                    step = self.num_timesteps
+                    model_path = self.agent.output_path / f"model_snapshot_{step}.zip"
+                    stats_path = self.agent.output_path / f"norm_stats_snapshot_{step}.json"
+                    
+                    self.model.save(model_path)
+                    self.agent.kit.upload_artifact(str(model_path), "model_snapshot", step)
+                    
+                    # Try saving norm stats if available
+                    if hasattr(env, "get_norm_stats"):
+                        stats = env.get_norm_stats()
+                        if stats:
+                            with open(stats_path, 'w') as f:
+                                json.dump(stats, f, indent=4)
+                            self.agent.kit.upload_artifact(str(stats_path), "normalization_stats_snapshot", step)
+                    
+                    self.agent.log(f"✅ Snapshot completed for step {step}.")
+                    
+                    # Clean up local snapshot files to save space
+                    if model_path.exists(): model_path.unlink()
+                    if stats_path.exists(): stats_path.unlink()
+                    
+                except Exception as e:
+                    self.agent.log(f"❌ Snapshot failed: {e}")
+                
+                self.agent.kit.clear_snapshot_request()
 
         return True
 
