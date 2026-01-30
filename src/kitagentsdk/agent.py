@@ -6,6 +6,7 @@ import atexit
 import shutil
 from pathlib import Path
 from abc import ABC, abstractmethod
+from datetime import datetime
 from .kit import KitClient
 from stable_baselines3.common.base_class import BaseAlgorithm
 from stable_baselines3.common.vec_env import VecEnv
@@ -19,6 +20,9 @@ class BaseAgent(ABC):
         
         self.kit = KitClient()
         self.config = {}
+        
+        # Buffer for batching trades before sending to Kit
+        self._trade_buffer = []
 
         if config_path and os.path.exists(config_path):
             try:
@@ -66,6 +70,62 @@ class BaseAgent(ABC):
     def record_metric(self, name: str, step: int, value: float):
         self.kit.log_metric(name, step, value)
 
+    def record_trade(self, 
+                     symbol: str, 
+                     direction: str, 
+                     entry_time: str | datetime, 
+                     exit_time: str | datetime, 
+                     entry_price: float, 
+                     exit_price: float, 
+                     quantity: float, 
+                     pnl_net: float, 
+                     pnl_gross: float,
+                     commission: float = 0.0, 
+                     slippage: float = 0.0,
+                     trade_id: str = None, # New Parameter
+                     entry_metadata: dict = None):
+        """
+        Records a completed trade for backtesting/analysis.
+        Buffers trades and flushes to the backend in chunks of 10 or when flush_trades() is called.
+        """
+        if isinstance(entry_time, datetime):
+            entry_time = entry_time.isoformat()
+        if isinstance(exit_time, datetime):
+            exit_time = exit_time.isoformat()
+
+        trade_data = {
+            "symbol": symbol,
+            "direction": direction,
+            "entry_time": entry_time,
+            "exit_time": exit_time,
+            "entry_price": float(entry_price),
+            "exit_price": float(exit_price),
+            "quantity": float(quantity),
+            "pnl_net": float(pnl_net),
+            "pnl_gross": float(pnl_gross),
+            "commission": float(commission),
+            "slippage": float(slippage),
+            "agent_trade_id": trade_id, # Mapped to schema
+            "entry_metadata": entry_metadata or {}
+        }
+        
+        self._trade_buffer.append(trade_data)
+        
+        # Auto-flush if buffer fills up
+        if len(self._trade_buffer) >= 10:
+            self.flush_trades()
+
+    def flush_trades(self):
+        """Manually forces the flush of any buffered trades."""
+        if not self._trade_buffer:
+            return
+            
+        count = len(self._trade_buffer)
+        self.kit.log_trades(self._trade_buffer)
+        # Log to agent output so user knows transfer happened
+        self.log(f"--- [Agent] Flushed batch of {count} trades to Kit ---")
+        self._trade_buffer = []
+
     def orchestrate_sb3_training(
         self,
         env: VecEnv,
@@ -112,17 +172,12 @@ class BaseAgent(ABC):
             self.emit_event("MODEL_SAVING_STARTED")
             model.save(final_model_path)
             
-            # Grab final step count for metadata
             final_step = model.num_timesteps
             
-            # These calls now raise exceptions if they fail, ensuring we don't prematurely complete the run
             self.kit.upload_artifact(str(final_model_path), "model", step=final_step)
             self.emit_event("MODEL_SAVED", "success")
 
-            # Always attempt to save normalization stats if the environment provides them.
             try:
-                # Access the unwrapped environment to check for get_norm_stats
-                # VecEnvs wrap the actual env; we assume envs[0] is representative.
                 base_env = env.envs[0].unwrapped
                 if hasattr(base_env, "get_norm_stats"):
                     stats = base_env.get_norm_stats()
@@ -137,7 +192,6 @@ class BaseAgent(ABC):
             if os.path.exists(temp_model_path):
                 os.remove(temp_model_path)
             
-            # --- CLEANUP OF OUTPUT DIRECTORY ---
             self.log("Cleaning up local output directory...")
             for item in self.output_path.iterdir():
                 try:
@@ -149,20 +203,16 @@ class BaseAgent(ABC):
                     print(f"[SDK-WARN] Failed to delete {item}: {e}", file=sys.stderr)
 
             self.emit_event("RUN_FINISHED", "success")
-            
-            # Explicitly shutdown to ensure all events (like RUN_FINISHED) are flushed
             self.kit.shutdown()
 
         except KeyboardInterrupt:
             self.log("--- 🛑 Training interrupted by user. ---")
-            # We don't emit FAILED here because the user might have killed it manually locally
-            # In KitExec context, SIGKILL is handled by JobRunner.
             sys.exit(0)
         except Exception as e:
             self.log(f"--- ❌ An unexpected error occurred during training: {e} ---")
             self.emit_event("AGENT_TRAINING_FAILED", "failure")
-            self.emit_event("RUN_FAILED", "failure") # Ensure state flip
-            self.kit.shutdown() # Attempt flush even on error
+            self.emit_event("RUN_FAILED", "failure") 
+            self.kit.shutdown()
             raise e
 
     @abstractmethod

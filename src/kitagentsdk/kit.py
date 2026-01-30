@@ -20,12 +20,10 @@ class KitClient:
         self.run_id = os.getenv("KIT_RUN_ID")
         self.agent = None 
         
-        # Internal command state
         self._stop_event = threading.Event()
         self._pause_event = threading.Event()
         self._snapshot_event = threading.Event()
         
-        # Strip trailing slash if present to avoid double slashes in URLs
         if self.api_endpoint and self.api_endpoint.endswith('/'):
             self.api_endpoint = self.api_endpoint[:-1]
         
@@ -34,7 +32,6 @@ class KitClient:
             self.enabled = False
         else:
             self.enabled = True
-            # Default headers for JSON endpoints
             self.headers = {"X-API-KEY": self.api_key, "Content-Type": "application/json"}
             
             if not self.run_id:
@@ -44,6 +41,7 @@ class KitClient:
                 self._metrics_queue = Queue()
                 self._log_queue = Queue()
                 self._progress_queue = Queue()
+                self._trade_queue = Queue()
                 self._shutdown_event = threading.Event()
                 self._telemetry_thread = threading.Thread(target=self._telemetry_worker, daemon=True)
                 self._telemetry_thread.start()
@@ -64,8 +62,6 @@ class KitClient:
         self._snapshot_event.clear()
 
     def _telemetry_worker(self):
-        """Background worker to flush metrics, logs, progress, and poll commands."""
-        # Increase interval to reduce server load
         polling_interval = 3.0
 
         while not self._shutdown_event.is_set():
@@ -73,6 +69,7 @@ class KitClient:
                 self._flush_metrics()
                 self._flush_logs()
                 self._flush_progress()
+                self._flush_trades()
                 
                 cmd = self._poll_command()
                 if cmd == "stop":
@@ -98,8 +95,6 @@ class KitClient:
                 
                 time.sleep(polling_interval)
             except Exception as e:
-                # Log error but don't crash thread
-                # Reduce noise for connection refused if server is restarting
                 err_str = str(e)
                 if "Connection refused" in err_str:
                     print(f"[SDK-WARN] Connection refused (server down?). Retrying...", file=sys.stderr)
@@ -108,12 +103,9 @@ class KitClient:
                 
                 time.sleep(5.0) # Backoff
         
-        # Flush one last time on exit handled by shutdown() method explicitly
-
     def _poll_command(self):
         if not self.enabled or not self.run_id: return None
         try:
-            # Increase timeout to 10s to handle server load spikes
             resp = requests.get(
                 f"{self.api_endpoint}/api/telemetry/command/{self.run_id}", 
                 headers=self.headers, 
@@ -123,10 +115,8 @@ class KitClient:
                 data = resp.json()
                 return data.get("command")
             elif resp.status_code != 200:
-                # Log unexpected status codes (e.g. 500, 404) to help debug
                 print(f"[SDK-ERR] Poll command failed. Status: {resp.status_code}", file=sys.stderr)
         except Exception as e:
-            # Re-raise to be handled by worker loop backoff
             raise e
         return None
 
@@ -170,24 +160,44 @@ class KitClient:
             except Exception as e:
                 print(f"[SDK-ERR] Progress push failed: {e}", file=sys.stderr)
 
+    def _flush_trades(self):
+        if self._trade_queue.empty(): return
+        batch = []
+        # Pull everything currently in the queue to minimize API calls
+        while not self._trade_queue.empty() and len(batch) < 50:
+            try:
+                batch.append(self._trade_queue.get_nowait())
+            except Empty:
+                break
+        
+        if not batch: return
+
+        payload = {"run_id": self.run_id, "trades": batch}
+        try:
+            response = requests.post(f"{self.api_endpoint}/api/telemetry/trades", json=payload, headers=self.headers, timeout=10)
+            response.raise_for_status()
+            # Explicit logging as requested
+            print(f"--- [SDK] Flushed {len(batch)} trades to Kit backend ---", file=sys.stderr)
+        except Exception as e:
+            print(f"[SDK-ERR] Trade push failed: {e}. Re-queueing {len(batch)} trades.", file=sys.stderr)
+            for t in batch:
+                self._trade_queue.put(t)
+
     def shutdown(self):
-        """Cleanly shuts down the client, flushing all pending data."""
         if hasattr(self, '_shutdown_event') and not self._shutdown_event.is_set():
             print("--- [SDK] Shutting down telemetry client... ---", file=sys.stderr)
             self._shutdown_event.set()
             if self._telemetry_thread.is_alive():
                 self._telemetry_thread.join(timeout=3.0)
             
-            # Explicit synchronous flush of any remaining items
             try:
                 self._flush_metrics()
                 self._flush_logs()
                 self._flush_progress()
+                self._flush_trades()
                 print("--- [SDK] Telemetry flushed. ---", file=sys.stderr)
             except Exception as e:
                 print(f"[SDK-ERR] Final flush error: {e}", file=sys.stderr)
-
-    # --- Telemetry Methods ---
 
     def log_message(self, message: str):
         if self.enabled and self.run_id:
@@ -202,11 +212,20 @@ class KitClient:
     def log_progress(self, step: int):
         if self.enabled and self.run_id:
             self._progress_queue.put(step)
-        
+    
+    def log_trades(self, trades: list):
+        """Buffers a list of trade objects to be sent to the backend."""
+        if self.enabled and self.run_id:
+            for t in trades:
+                self._trade_queue.put(t)
+        else:
+            # Local debug echo
+            for t in trades:
+                print(f"[TRADE] {json.dumps(t)}", flush=True)
+
     def log_event(self, event_name: str, status: str = "info"):
         if self.enabled and self.run_id:
             print(f"--- [SDK] Event: {event_name} ({status}) ---", file=sys.stderr)
-            # Send immediately via main thread for events, don't queue
             payload = {"event": event_name, "status": status}
             try:
                 requests.post(f"{self.api_endpoint}/api/telemetry/event/{self.run_id}", json=payload, headers=self.headers, timeout=10)
@@ -222,8 +241,6 @@ class KitClient:
                 requests.post(f"{self.api_endpoint}/api/telemetry/total_steps", json=payload, headers=self.headers, timeout=10)
             except Exception as e:
                 print(f"[SDK-ERR] Total steps update failed: {e}", file=sys.stderr)
-
-    # --- Data & Configuration ---
 
     def get_run_config(self) -> dict | None:
         if not self.enabled or not self.run_id: return None
@@ -243,31 +260,22 @@ class KitClient:
         if not self.enabled or not self.run_id:
             print(f"[SDK] Upload skipped: SDK disabled.", file=sys.stderr)
             return
-        
         print(f"--- [SDK] Uploading artifact: {os.path.basename(file_path)}... ---", file=sys.stderr)
         endpoint = f"{self.api_endpoint}/api/runs/{self.run_id}/artifacts"
-        
-        # Create headers without 'Content-Type' for multipart upload
         upload_headers = self.headers.copy()
         upload_headers.pop("Content-Type", None)
-
         try:
             with open(file_path, 'rb') as f:
-                # Explicit MIME type 'application/octet-stream' to prevent 422 errors
                 files = {'file': (os.path.basename(file_path), f, 'application/octet-stream')}
                 data = {'artifact_type': artifact_type}
                 if step is not None:
                     data['step'] = str(step)
-                    
                 resp = requests.post(endpoint, files=files, data=data, headers=upload_headers, timeout=600)
-                
                 if resp.status_code != 200:
                      print(f"--- [SDK-ERR] Backend returned {resp.status_code}: {resp.text} ---", file=sys.stderr)
                      resp.raise_for_status()
-
                 print(f"--- [SDK] Upload success: {os.path.basename(file_path)} ---", file=sys.stderr)
         except Exception as e:
-            # FATAL ERROR: Re-raise so the agent knows upload failed and can exit/retry
             print(f"[SDK-ERR] Upload failed for {file_path}: {e}", file=sys.stderr)
             raise e
 
@@ -300,9 +308,7 @@ class KitClient:
             msg = f"Failed to list artifacts: {e}"
             if self.agent: self.agent.log(msg)
             return False
-
         if not artifacts: return False
-
         for artifact in artifacts:
             self.download_artifact(artifact['id'], destination_folder / artifact['filename'])
         return True
@@ -318,13 +324,10 @@ class KitClient:
                     return json.load(f)
             except Exception as e:
                 print(f"Failed local load: {e}", file=sys.stderr)
-
         if not self.enabled: return None
-        
         endpoint = f"{self.api_endpoint}/api/data/training_set"
         try:
             if self.agent: self.agent.emit_event("TRAINING_DATA_REQUESTED")
-            # Increase timeout for large data requests
             response = requests.post(endpoint, json=params, headers=self.headers, timeout=300)
             response.raise_for_status()
             if self.agent: self.agent.emit_event("TRAINING_DATA_RECEIVED", "success")

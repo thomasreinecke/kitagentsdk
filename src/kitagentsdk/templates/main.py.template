@@ -2,7 +2,9 @@
 from kitagentsdk import BaseAgent, run_agent
 import time
 import sys
-
+import json
+import random
+from pathlib import Path
 
 class {{AGENT_CLASS_NAME}}(BaseAgent):
     """
@@ -11,12 +13,10 @@ class {{AGENT_CLASS_NAME}}(BaseAgent):
 
     def train(self):
         """
-        This method is called by the kitexec executor.
+        This method is called by the kitexec executor for training.
         """
         self.log(f"--- {{AGENT_NAME}} Training Run Initializing ---")
 
-        # --- 1. Load Configuration ---
-        # Access parameters from manifest.json via self.config
         try:
             total_steps = int(self.config.get("total_steps", 100))
             learning_rate = float(self.config.get("learning_rate", 0.01))
@@ -25,29 +25,27 @@ class {{AGENT_CLASS_NAME}}(BaseAgent):
             self.log(f"❌ Error: Invalid configuration parameters provided. {e}")
             sys.exit(1)
 
-        # --- 2. Simulate Training Loop ---
-        # In a real agent, this would be your model.learn() call.
         self.log("Starting simulated training loop...")
         for i in range(total_steps):
-            # Report progress frequently for a responsive UI
             self.report_progress(i + 1)
-
-            self.log(f"Step {i+1}/{total_steps}: Processing data...")
-
             # Record metrics periodically for visualization
             if (i + 1) % 10 == 0:
-                pnl = (i + 1 - (total_steps / 2)) * 0.1  # Example metric
+                pnl = (i + 1 - (total_steps / 2)) * 0.1 
                 self.record_metric("performance/pnl", i + 1, pnl)
+            time.sleep(0.01) # fast simulation
 
-            time.sleep(0.1)
-
-        # --- 3. Save Artifacts ---
-        # The platform expects a standardized 'model.zip' for stage transitions.
         try:
             model_artifact_path = self.output_path / "model.zip"
             with open(model_artifact_path, "w") as f:
                 f.write(f"This is a dummy model trained for {total_steps} steps.")
             self.log(f"✅ Model artifact saved to: {model_artifact_path}")
+            
+            # Save norm stats too
+            stats_path = self.output_path / "norm_stats.json"
+            with open(stats_path, "w") as f:
+                json.dump({"mean": 0.0, "std": 1.0}, f)
+            self.kit.upload_artifact(str(stats_path), "normalization_stats", step=total_steps)
+            
         except IOError as e:
             self.log(f"❌ Error: Could not save artifact. {e}")
             sys.exit(1)
@@ -56,13 +54,73 @@ class {{AGENT_CLASS_NAME}}(BaseAgent):
 
     def test(self):
         """
-        This method is called by the kitexec executor in simulation/backtest mode.
+        This method is called by the kitexec executor in backtest mode.
         """
-        self.log(f"--- {{AGENT_NAME}} Test Run Initializing ---")
-        self.log("No test logic implemented yet.")
-        self.log("--- ✅ Test Run Finished ---")
+        self.log(f"--- {{AGENT_NAME}} Backtest Run Initializing ---")
+        
+        # 1. Load Artifacts (Model & Norm Stats)
+        # kitexec downloads them to self.output_path before starting
+        model_path = self.output_path / "model.zip"
+        norm_path = self.output_path / "norm_stats.json"
+        
+        if not model_path.exists():
+            self.log(f"❌ Error: model.zip not found in {self.output_path}. Backtest cannot proceed.")
+            sys.exit(1)
+            
+        self.log(f"✅ Loaded model from {model_path}")
+        if norm_path.exists():
+            self.log(f"✅ Loaded normalization stats from {norm_path}")
+        else:
+            self.log("⚠️ No normalization stats found. Proceeding without them.")
+
+        # 2. Setup Backtest Loop
+        # In a real agent, load your env with the test dataset
+        total_days = 20
+        steps_per_day = 10
+        total_steps = total_days * steps_per_day
+        
+        # Tell backend total steps for progress bar
+        if self.kit.enabled:
+            self.kit.update_total_steps(total_steps)
+
+        self.log(f"Starting backtest simulation for {total_days} days ({total_steps} steps)...")
+        
+        # 3. Simulation Loop
+        current_step = 0
+        capital = 10000.0
+        
+        for day in range(total_days):
+            self.log(f"Simulating Day {day+1}/{total_days}...")
+            
+            for step in range(steps_per_day):
+                current_step += 1
+                self.report_progress(current_step)
+                
+                # Mock Trading Logic: 10% chance to trade
+                if random.random() < 0.1:
+                    pnl = random.uniform(-50, 100)
+                    capital += pnl
+                    
+                    # Record the trade
+                    self.record_trade(
+                        symbol="YM",
+                        direction="LONG" if random.random() > 0.5 else "SHORT",
+                        entry_time=datetime.now().isoformat(), # Mock time
+                        exit_time=datetime.now().isoformat(),
+                        entry_price=34000.0,
+                        exit_price=34000.0 + (pnl/5.0), # Assuming $5 per point
+                        quantity=1,
+                        pnl_net=pnl - 2.5, # commission
+                        pnl_gross=pnl,
+                        commission=2.5,
+                        slippage=0.0
+                    )
+                
+                time.sleep(0.05) # Simulate processing time
+
+        self.log(f"--- ✅ Backtest Finished. Final Capital: ${capital:.2f} ---")
 
 
 if __name__ == "__main__":
-    # This allows the script to be run directly by the kitexec executor
+    from datetime import datetime
     run_agent({{AGENT_CLASS_NAME}})
